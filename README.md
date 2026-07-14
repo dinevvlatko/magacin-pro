@@ -37,3 +37,4 @@ npm run preview
 - `src/App.tsx` feature screens and workflows
 
 The storage layer is isolated so it can later be replaced by Supabase repositories and authentication.
+"# magacin-pro" 
