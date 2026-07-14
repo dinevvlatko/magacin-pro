@@ -114,7 +114,7 @@ function PackingPrint({o}:{o:Order}){
  const free025Pieces=o.free025*15+(o.free025Pieces||0)
  const packingResult=(packages:number,extraPieces:number,perPackage:number,total:number,unit:string)=>`${packages} × ${perPackage}${extraPieces?` + ${extraPieces}`:''} = ${format(total)} ${unit}`
  return <div className="print-sheet">
-  <header className="packing-print-head"><span>MAGACIN PRO</span><h1>ПАКИНГ ЛИСТА</h1></header>
+  <header className="packing-print-head"><h1>СПЕЦИФИКАЦИЈА ЗА ПАКУВАЊЕ</h1></header>
   <section className="packing-print-meta"><div><span>Број на пакинг листа</span><strong>{o.number}</strong></div><div className="packing-client"><span>Клиент</span><strong>{o.client}</strong></div><div><span>Датум</span><b>{o.date}</b></div><div><span>Град</span><b>{o.city}</b></div></section>
   <table className="packing-print-table"><thead><tr><th>Производ</th><th>Количина</th><th>Бр. во пакет</th><th>Пакување</th></tr></thead><tbody>
    <tr><td><strong>0.25 L</strong></td><td>{packageQuantity(o.qty025,o.qty025Pieces||0)}</td><td>15 шишиња</td><td><strong>{packingResult(o.qty025,o.qty025Pieces||0,15,regular025Pieces,'шишиња')}</strong></td></tr>
