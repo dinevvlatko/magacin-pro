@@ -1,7 +1,8 @@
 import { describe,expect,it } from 'vitest'
 import type { AppState,Order } from '../types'
-import { allPacked, canReplaceOrder, canReserveOrder, deductOrderStock, returnOrderStock } from './logic'
+import { allPacked, available, canReplaceOrder, canReserveOrder, deductOrderStock, hydrateState, reconcileWaitingOrders, returnOrderStock } from './logic'
 import { mergeConcurrentStates,StateMergeError } from './stateMerge'
+import { packageQrValue, scanPackageQr } from './packageQr'
 
 const order=(id:string,number:string,qty025=1):Order=>({id,number,client:id,city:'Скопје',date:'2026-07-15',qty025,qty025Pieces:0,qty15:0,qty15Pieces:0,free025:0,free025Pieces:0,flyers:0,note:'',status:'Нова',packed:{regular025:false,bib15:false,free025:false,flyers:false},stockDeducted:false})
 const state=(orders:Order[]=[],p025=1500):AppState=>({warehouse:{p025:{total:p025,packages:Math.floor(p025/15),pieces:p025%15,perPackage:15},p15:{total:600,packages:100,pieces:0,perPackage:6},flyers:3000},orders,clients:[],movements:[]})
@@ -42,6 +43,22 @@ describe('conflict-safe warehouse merge',()=>{
 
 describe('stock safeguards',()=>{
  it('blocks a new order larger than the currently free stock',()=>expect(canReserveOrder(state([],15),order('big','PG-2026-0001',2))).toBe(false))
+ it('keeps waiting orders as soft demand without making available stock negative',()=>{
+  const waiting={...order('waiting','PG-2026-0001',2),status:'Чека залиха' as const}
+  expect(available(state([waiting],15)).p025).toBe(15)
+ })
+ it('activates waiting orders FIFO when a receipt creates enough free stock',()=>{
+  const first={...order('first','PG-2026-0001',1),status:'Чека залиха' as const},second={...order('second','PG-2026-0002',1),status:'Чека залиха' as const}
+  const reconciled=reconcileWaitingOrders(state([second,first],15))
+  expect(reconciled.orders.find(item=>item.id==='first')?.status).toBe('Нова')
+  expect(reconciled.orders.find(item=>item.id==='second')?.status).toBe('Чека залиха')
+ })
+ it('migrates old overbooked active orders to waiting status on load',()=>{
+  const first=order('first','PG-2026-0001',1),second=order('second','PG-2026-0002',1),hydrated=hydrateState(state([first,second],15))
+  expect(hydrated.orders.find(item=>item.id==='first')?.status).toBe('Нова')
+  expect(hydrated.orders.find(item=>item.id==='second')?.status).toBe('Чека залиха')
+  expect(available(hydrated).p025).toBe(0)
+ })
  it('restores deducted stock when an order is cancelled',()=>{
   const original=order('one','PG-2026-0001'),packed=deductOrderStock(state([original]),original,'Спакувана')!
   const restored=returnOrderStock(packed,packed.orders[0])
@@ -64,5 +81,14 @@ describe('stock safeguards',()=>{
  it('does not require zero-quantity rows to be checked',()=>{
   const oneItem={...order('one','PG-2026-0001'),packed:{regular025:true,bib15:false,free025:false,free15:false,flyers:false}}
   expect(allPacked(oneItem)).toBe(true)
+ })
+ it('accepts each package QR once and completes a package-only order',()=>{
+  const original=order('qr-order','PG-2026-0001'),current=state([original])
+  const value=packageQrValue(original,'regular025',1),scanned=scanPackageQr(current,original.id,value)
+  expect(scanned.error).toBeUndefined()
+  expect(scanned.state.orders[0].scannedPackages?.regular025).toEqual([1])
+  expect(scanned.state.orders[0].status).toBe('Спакувана')
+  expect(scanned.state.warehouse.p025.total).toBe(1485)
+  expect(scanPackageQr(scanned.state,original.id,value).error).toBeTruthy()
  })
 })
