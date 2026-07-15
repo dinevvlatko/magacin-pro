@@ -3,7 +3,7 @@ import { afterEach,describe,expect,it,vi } from 'vitest'
 import type { Order } from '../types'
 import { createOrderPdf,packingCalculation } from './orderPdf'
 
-const sample:Order={id:'one',number:'PG-2026-0001',client:'Тест Клиент',city:'Скопје',date:'2026-07-15',qty025:10,qty025Pieces:2,qty15:5,qty15Pieces:1,free025:1,free025Pieces:0,flyers:200,note:'Македонски текст',status:'Нова',packed:{regular025:false,bib15:false,free025:false,flyers:false},stockDeducted:false}
+const sample:Order={id:'one',number:'PG-2026-0001',client:'Тест Клиент',city:'Скопје',date:'2026-07-15',qty025:10,qty025Pieces:2,qty15:5,qty15Pieces:1,free025:1,free025Pieces:0,free15:2,free15Pieces:1,flyers:200,note:'Македонски текст',status:'Нова',packed:{regular025:false,bib15:false,free025:false,free15:false,flyers:false},stockDeducted:false}
 
 afterEach(()=>vi.unstubAllGlobals())
 

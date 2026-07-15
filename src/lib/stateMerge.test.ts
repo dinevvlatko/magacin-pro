@@ -1,6 +1,6 @@
 import { describe,expect,it } from 'vitest'
 import type { AppState,Order } from '../types'
-import { canReserveOrder, deductOrderStock, returnOrderStock } from './logic'
+import { allPacked, canReplaceOrder, canReserveOrder, deductOrderStock, returnOrderStock } from './logic'
 import { mergeConcurrentStates,StateMergeError } from './stateMerge'
 
 const order=(id:string,number:string,qty025=1):Order=>({id,number,client:id,city:'Скопје',date:'2026-07-15',qty025,qty025Pieces:0,qty15:0,qty15Pieces:0,free025:0,free025Pieces:0,flyers:0,note:'',status:'Нова',packed:{regular025:false,bib15:false,free025:false,flyers:false},stockDeducted:false})
@@ -48,5 +48,21 @@ describe('stock safeguards',()=>{
   expect(restored.warehouse.p025.total).toBe(1500)
   expect(restored.orders[0].status).toBe('Откажана')
   expect(restored.movements.some(item=>item.type==='Враќање')).toBe(true)
+ })
+ it('deducts and restores free BiB together with regular BiB',()=>{
+  const original={...order('bib','PG-2026-0001'),free15:2,free15Pieces:1}
+  const packed=deductOrderStock(state([original]),original,'Спакувана')!
+  expect(packed.warehouse.p15.total).toBe(587)
+  expect(packed.movements.find(item=>item.product==='p15')).toMatchObject({packages:2,pieces:1})
+  expect(returnOrderStock(packed,packed.orders[0]).warehouse.p15.total).toBe(600)
+ })
+ it('allows an overbooked order correction only when it does not worsen the shortage',()=>{
+  const original=order('original','PG-2026-0001',2),other=order('other','PG-2026-0002',2),current=state([original,other],15)
+  expect(canReplaceOrder(current,original,{...original,qty025:1})).toBe(true)
+  expect(canReplaceOrder(current,original,{...original,qty025:3})).toBe(false)
+ })
+ it('does not require zero-quantity rows to be checked',()=>{
+  const oneItem={...order('one','PG-2026-0001'),packed:{regular025:true,bib15:false,free025:false,free15:false,flyers:false}}
+  expect(allPacked(oneItem)).toBe(true)
  })
 })

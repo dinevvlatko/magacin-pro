@@ -41,10 +41,11 @@ export async function createOrderPdf(order:Order){
  for(const x of columns.slice(1,-1))page.drawLine({start:{x,y:headerTop-headerHeight},end:{x,y:headerTop},thickness:.7,color:line})
 
  const rows=[
-  {height:48,product:productName('p025'),amount:quantity(order.qty025,order.qty025Pieces||0),inPackage:'15 шишиња',packing:packingCalculation(order.qty025,order.qty025Pieces||0,15,'шишиња')},
-  {height:48,product:productName('p15'),amount:quantity(order.qty15,order.qty15Pieces||0),inPackage:'6 БиБ',packing:packingCalculation(order.qty15,order.qty15Pieces||0,6,'БиБ')},
-  {height:62,product:`Гратис ${productName('p025')}`,sub:'Се пакува одделно',amount:quantity(order.free025,order.free025Pieces||0),inPackage:'15 шишиња',packing:packingCalculation(order.free025,order.free025Pieces||0,15,'шишиња'),packingSub:'ОДДЕЛНО'},
-  {height:48,product:productName('flyers'),amount:`${order.flyers} парчиња`,inPackage:'-',packing:`${order.flyers} парчиња`},
+  {height:44,product:productName('p025'),amount:quantity(order.qty025,order.qty025Pieces||0),inPackage:'15 шишиња',packing:packingCalculation(order.qty025,order.qty025Pieces||0,15,'шишиња')},
+  {height:44,product:productName('p15'),amount:quantity(order.qty15,order.qty15Pieces||0),inPackage:'6 БиБ',packing:packingCalculation(order.qty15,order.qty15Pieces||0,6,'БиБ')},
+  {height:56,product:`Гратис ${productName('p025')}`,sub:'Се пакува одделно',amount:quantity(order.free025,order.free025Pieces||0),inPackage:'15 шишиња',packing:packingCalculation(order.free025,order.free025Pieces||0,15,'шишиња'),packingSub:'ОДДЕЛНО'},
+  {height:56,product:`Гратис ${productName('p15')}`,sub:'Се пакува одделно',amount:quantity(order.free15||0,order.free15Pieces||0),inPackage:'6 БиБ',packing:packingCalculation(order.free15||0,order.free15Pieces||0,6,'БиБ'),packingSub:'ОДДЕЛНО'},
+  {height:44,product:productName('flyers'),amount:`${order.flyers} парчиња`,inPackage:'-',packing:`${order.flyers} парчиња`},
  ]
  let rowTop=headerTop-headerHeight
  for(const row of rows){
