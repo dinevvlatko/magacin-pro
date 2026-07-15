@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import type { AppState } from '../types'
 import { loadState, saveState } from './storage'
+import { hydrateState } from './logic'
 import { supabase, syncEnabled } from './supabase'
 
 export type SyncStatus = 'loading' | 'offline' | 'syncing' | 'synced' | 'error'
@@ -107,9 +108,10 @@ export function useSyncedState() {
 
       if (data?.state) {
         const serialized = JSON.stringify(data.state)
+        const hydrated = hydrateState(data.state)
         lastRemoteState.current = serialized
-        setState(data.state)
-        saveState(data.state)
+        setState(hydrated)
+        saveState(hydrated)
       } else {
         const localState = loadState()
         const { error: insertError } = await supabase.from('shared_warehouse_state').insert({
@@ -130,8 +132,9 @@ export function useSyncedState() {
             return
           }
           lastRemoteState.current = JSON.stringify(existing.state)
-          setState(existing.state)
-          saveState(existing.state)
+          const hydrated = hydrateState(existing.state)
+          setState(hydrated)
+          saveState(hydrated)
         } else if (insertError) {
           setSyncStatus('error')
           setSyncError(insertError.message)
@@ -163,9 +166,10 @@ export function useSyncedState() {
           if (!remote) return
           const serialized = JSON.stringify(remote)
           if (serialized === lastRemoteState.current) return
+          const hydrated = hydrateState(remote)
           lastRemoteState.current = serialized
-          setState(remote)
-          saveState(remote)
+          setState(hydrated)
+          saveState(hydrated)
           setSyncStatus('synced')
         },
       )
