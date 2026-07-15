@@ -5,17 +5,19 @@ import notoSansLatinBoldUrl from '@fontsource/noto-sans/files/noto-sans-latin-70
 import type { Order } from '../types'
 import { formatDocumentDate } from './date'
 import { productName } from './logic'
+import { createOrderQrDataUrl } from './orderQr'
 
 const filename=(order:Order)=>`${order.number.replace(/^PG-/,'SP-')}-${order.client.replace(/[^a-zA-Z0-9а-яА-ЯЀ-ӿ_-]+/g,'-')}.pdf`
 const quantity=(packages:number,pieces:number)=>`${packages} пакети${pieces?` + ${pieces} парчиња`:''}`
 export const packingCalculation=(packages:number,pieces:number,perPackage:number,unit:string)=>`${packages} x ${perPackage}${pieces?` + ${pieces}`:''} = ${packages*perPackage+pieces} ${unit}`
 
 export async function createOrderPdf(order:Order){
- const [{PDFDocument,rgb},fontkitModule]=await Promise.all([import('pdf-lib'),import('@pdf-lib/fontkit')])
+ const [{PDFDocument,rgb},fontkitModule,qrDataUrl]=await Promise.all([import('pdf-lib'),import('@pdf-lib/fontkit'),createOrderQrDataUrl(order.id)])
  const document=await PDFDocument.create();document.registerFontkit(fontkitModule.default)
  const fontUrls=[notoSansUrl,notoSansLatinUrl,notoSansBoldUrl,notoSansLatinBoldUrl]
  const fontBytes=await Promise.all(fontUrls.map(url=>fetch(url).then(response=>{if(!response.ok)throw new Error('Не може да се вчита PDF фонтот.');return response.arrayBuffer()})))
  const [cyrillic,latin,cyrillicBold,latinBold]=await Promise.all(fontBytes.map(bytes=>document.embedFont(bytes,{subset:true})))
+ const qrImage=await document.embedPng(qrDataUrl)
  const page=document.addPage([595.28,841.89]),{width}=page.getSize(),ink=rgb(.06,.07,.08),muted=rgb(.35,.37,.39),line=rgb(.38,.4,.42),pale=rgb(.94,.95,.95)
  const fontPair=(bold=false)=>bold?{cyrillic:cyrillicBold,latin:latinBold}:{cyrillic,latin}
  const runs=(text:string,bold=false)=>[...text].reduce<Array<{text:string;font:typeof latin}>>((result,char)=>{const pair=fontPair(bold),font=/[\u0400-\u052f]/.test(char)?pair.cyrillic:pair.latin,last=result.at(-1);if(last?.font===font)last.text+=char;else result.push({text:char,font});return result},[])
@@ -27,6 +29,7 @@ export async function createOrderPdf(order:Order){
  const meta=(label:string,value:string,x:number,y:number,w:number,h:number,large=false)=>{rect(x,y,w,h);draw(label.toUpperCase(),x+10,y+h-17,7,true,muted);draw(value,x+10,y+13,fit(value,w-20,large?18:12,true),true)}
 
  center('СПЕЦИФИКАЦИЈА ЗА ПАКУВАЊЕ',792,18,true)
+ page.drawImage(qrImage,{x:500,y:782,width:50,height:50})
  page.drawLine({start:{x:42,y:775},end:{x:553,y:775},thickness:2,color:ink})
 
  const left=42,right=553,gap=8,leftMeta=210,rightMeta=293

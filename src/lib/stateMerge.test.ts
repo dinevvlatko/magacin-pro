@@ -2,7 +2,7 @@ import { describe,expect,it } from 'vitest'
 import type { AppState,Order } from '../types'
 import { allPacked, available, canReplaceOrder, canReserveOrder, deductOrderStock, hydrateState, reconcileWaitingOrders, returnOrderStock } from './logic'
 import { mergeConcurrentStates,StateMergeError } from './stateMerge'
-import { packageQrValue, scanPackageQr } from './packageQr'
+import { orderQrUrl } from './orderQr'
 import { formatDocumentDate } from './date'
 
 const order=(id:string,number:string,qty025=1):Order=>({id,number,client:id,city:'Скопје',date:'2026-07-15',qty025,qty025Pieces:0,qty15:0,qty15Pieces:0,free025:0,free025Pieces:0,flyers:0,note:'',status:'Нова',packed:{regular025:false,bib15:false,free025:false,flyers:false},stockDeducted:false})
@@ -84,13 +84,9 @@ describe('stock safeguards',()=>{
   const oneItem={...order('one','PG-2026-0001'),packed:{regular025:true,bib15:false,free025:false,free15:false,flyers:false}}
   expect(allPacked(oneItem)).toBe(true)
  })
- it('accepts each package QR once and completes a package-only order',()=>{
-  const original=order('qr-order','PG-2026-0001'),current=state([original])
-  const value=packageQrValue(original,'regular025',1),scanned=scanPackageQr(current,original.id,value)
-  expect(scanned.error).toBeUndefined()
-  expect(scanned.state.orders[0].scannedPackages?.regular025).toEqual([1])
-  expect(scanned.state.orders[0].status).toBe('Спакувана')
-  expect(scanned.state.warehouse.p025.total).toBe(1485)
-  expect(scanPackageQr(scanned.state,original.id,value).error).toBeTruthy()
+ it('creates one deep link QR for the complete order',()=>expect(orderQrUrl('order-123','https://magacin-pro-ten.vercel.app')).toBe('https://magacin-pro-ten.vercel.app/?order=order-123'))
+ it('removes the former package-scan archive while loading data',()=>{
+  const legacy={...order('legacy','PG-2026-0001'),scannedPackages:{regular025:[1,2,3]}}
+  expect('scannedPackages' in hydrateState(state([legacy])) .orders[0]).toBe(false)
  })
 })
