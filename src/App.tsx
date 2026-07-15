@@ -12,6 +12,7 @@ import { AdminPage } from './components/AdminPage'
 import { ClientsPage } from './components/ClientsPage'
 import { shareOrderPdf } from './lib/orderPdf'
 import { downloadPackageQrLabels, packageQrRows, scanPackageQr } from './lib/packageQr'
+import { formatDocumentDate } from './lib/date'
 import './index.css'
 
 const statusClass=(s:OrderStatus)=>`status ${s.replaceAll(' ','-').toLowerCase()}`
@@ -254,7 +255,7 @@ function PackingPrint({o}:{o:Order}){
  const packingResult=(packages:number,extraPieces:number,perPackage:number,total:number,unit:string)=>`${packages} × ${perPackage}${extraPieces?` + ${extraPieces}`:''} = ${format(total)} ${unit}`
  return <div className="print-sheet">
   <header className="packing-print-head"><h1>СПЕЦИФИКАЦИЈА ЗА ПАКУВАЊЕ</h1></header>
-  <section className="packing-print-meta"><div><span>Број на спецификација</span><strong>{packingNumber(o)}</strong></div><div className="packing-client"><span>Клиент</span><strong>{o.client}</strong></div><div><span>Датум</span><b>{o.date}</b></div><div><span>Град</span><b>{o.city}</b></div></section>
+  <section className="packing-print-meta"><div><span>Број на спецификација</span><strong>{packingNumber(o)}</strong></div><div className="packing-client"><span>Клиент</span><strong>{o.client}</strong></div><div><span>Датум</span><b>{formatDocumentDate(o.date)}</b></div><div><span>Град</span><b>{o.city}</b></div></section>
   <table className="packing-print-table"><thead><tr><th>Производ</th><th>Количина</th><th>Бр. во пакет</th><th>Пакување</th></tr></thead><tbody>
    <tr><td><strong>{productName('p025')}</strong></td><td>{packageQuantity(o.qty025,o.qty025Pieces||0)}</td><td>15 шишиња</td><td><strong>{packingResult(o.qty025,o.qty025Pieces||0,15,regular025Pieces,'шишиња')}</strong></td></tr>
    <tr><td><strong>{productName('p15')}</strong></td><td>{packageQuantity(o.qty15,o.qty15Pieces||0)}</td><td>6 БиБ</td><td><strong>{packingResult(o.qty15,o.qty15Pieces||0,6,bib15Pieces,'БиБ')}</strong></td></tr>

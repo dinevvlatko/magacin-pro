@@ -3,6 +3,7 @@ import type { AppState,Order } from '../types'
 import { allPacked, available, canReplaceOrder, canReserveOrder, deductOrderStock, hydrateState, reconcileWaitingOrders, returnOrderStock } from './logic'
 import { mergeConcurrentStates,StateMergeError } from './stateMerge'
 import { packageQrValue, scanPackageQr } from './packageQr'
+import { formatDocumentDate } from './date'
 
 const order=(id:string,number:string,qty025=1):Order=>({id,number,client:id,city:'Скопје',date:'2026-07-15',qty025,qty025Pieces:0,qty15:0,qty15Pieces:0,free025:0,free025Pieces:0,flyers:0,note:'',status:'Нова',packed:{regular025:false,bib15:false,free025:false,flyers:false},stockDeducted:false})
 const state=(orders:Order[]=[],p025=1500):AppState=>({warehouse:{p025:{total:p025,packages:Math.floor(p025/15),pieces:p025%15,perPackage:15},p15:{total:600,packages:100,pieces:0,perPackage:6},flyers:3000},orders,clients:[],movements:[]})
@@ -42,6 +43,7 @@ describe('conflict-safe warehouse merge',()=>{
 })
 
 describe('stock safeguards',()=>{
+ it('formats specification dates as dd/mm/yyyy',()=>expect(formatDocumentDate('2026-07-15')).toBe('15/07/2026'))
  it('blocks a new order larger than the currently free stock',()=>expect(canReserveOrder(state([],15),order('big','PG-2026-0001',2))).toBe(false))
  it('keeps waiting orders as soft demand without making available stock negative',()=>{
   const waiting={...order('waiting','PG-2026-0001',2),status:'Чека залиха' as const}

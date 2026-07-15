@@ -3,6 +3,7 @@ import notoSansLatinUrl from '@fontsource/noto-sans/files/noto-sans-latin-400-no
 import notoSansBoldUrl from '@fontsource/noto-sans/files/noto-sans-cyrillic-700-normal.woff?url'
 import notoSansLatinBoldUrl from '@fontsource/noto-sans/files/noto-sans-latin-700-normal.woff?url'
 import type { Order } from '../types'
+import { formatDocumentDate } from './date'
 import { productName } from './logic'
 
 const filename=(order:Order)=>`${order.number.replace(/^PG-/,'SP-')}-${order.client.replace(/[^a-zA-Z0-9а-яА-ЯЀ-ӿ_-]+/g,'-')}.pdf`
@@ -31,7 +32,7 @@ export async function createOrderPdf(order:Order){
  const left=42,right=553,gap=8,leftMeta=210,rightMeta=293
  meta('Број на спецификација',order.number.replace(/^PG-/,'SP-'),left,716,leftMeta,48,true)
  meta('Клиент',order.client,left+leftMeta+gap,716,rightMeta,48,true)
- meta('Датум',order.date,left,660,leftMeta,48)
+ meta('Датум',formatDocumentDate(order.date),left,660,leftMeta,48)
  meta('Град',order.city,left+leftMeta+gap,660,rightMeta,48)
 
  const columns=[left,164,278,369,right]

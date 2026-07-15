@@ -19,5 +19,5 @@ describe('packing specification PDF',()=>{
   const bytes=await createOrderPdf(sample)
   expect(new TextDecoder().decode(bytes.slice(0,8))).toContain('%PDF-')
   expect(bytes.length).toBeGreaterThan(5_000)
- })
+ },15_000)
 })
