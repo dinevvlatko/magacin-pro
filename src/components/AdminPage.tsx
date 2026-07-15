@@ -20,6 +20,7 @@ const actionLabels:Record<string,string>={
   'order.status_changed':'Променет статус',
   'order.packing_checked':'Променета ставка за пакување',
   'stock.movement':'Движење на залиха',
+  'stock.receipt':'Креирана приемница',
   'app.demo_reset':'Ресетирани демо податоци',
   'user.role_changed':'Променета корисничка улога',
   'user.access_changed':'Променет кориснички пристап',

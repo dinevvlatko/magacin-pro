@@ -10,4 +10,4 @@ export const updatePackedItem=(s:AppState,id:string,key:keyof PackedChecks,value
 export const hydrateState=(state:AppState):AppState=>({...state,orders:state.orders.map(o=>{const hydrated={...o,qty025Pieces:o.qty025Pieces||0,qty15Pieces:o.qty15Pieces||0,free025Pieces:o.free025Pieces||0};return activeStatuses.has(hydrated.status)&&allPacked(hydrated)?{...hydrated,status:'Спакувана'}:hydrated})})
 export const reserved=(s:AppState)=>s.orders.filter(o=>activeStatuses.has(o.status)&&!o.stockDeducted).reduce((a,o)=>{const q=orderPieces(o);return {p025:a.p025+q.p025,p15:a.p15+q.p15,flyers:a.flyers+q.flyers}},{p025:0,p15:0,flyers:0})
 export const available=(s:AppState)=>{const r=reserved(s);return {p025:s.warehouse.p025.total-r.p025,p15:s.warehouse.p15.total-r.p15,flyers:s.warehouse.flyers-r.flyers}}
-export const productName=(p:ProductKey)=>p==='p025'?'0.25 L':p==='p15'?'1.5 L BIB':'Флаери'
+export const productName=(p:ProductKey)=>p==='p025'?'Шише 0.250 мл':p==='p15'?'БиБ 1,5 Л':'Флаери'
