@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ArchiveRestore, ArrowLeftRight, CheckCircle2, ChevronRight, CirclePlus, Cloud, CloudOff, Eye, FileText, LogIn, LogOut, Package, Pencil, Printer, QrCode, RotateCcw, Search, Send, ShieldCheck, Trash2, Truck, Warehouse as WarehouseIcon } from 'lucide-react'
 import type { AppState, Movement, MovementType, Order, OrderStatus, ProductKey } from './types'
 import { demoState, makeOrderNumber } from './lib/data'
-import { activeStatuses, allowedTransitions, allPacked, available, breakdown, canReserveOrder, deductOrderStock, deductStatuses, hydrateState, normalize, orderPieces, productName, reconcileWaitingOrders, reservationShortage, reserved, returnOrderStock, updatePackedItem } from './lib/logic'
+import { activeStatuses, allowedTransitions, allPacked, applyOrderStatusTransition, available, breakdown, canReserveOrder, deductOrderStock, hydrateState, normalize, orderPieces, productName, reconcileWaitingOrders, reservationShortage, reserved, returnOrderStock, updatePackedItem } from './lib/logic'
 import { supabase, syncEnabled } from './lib/supabase'
 import { useSyncedState, type SyncStatus } from './lib/useSyncedState'
 import { appVersion } from './pwa'
@@ -68,25 +68,22 @@ function App(){
   if((next==='Нова'||next==='Во подготовка')&&!o.stockDeducted&&!canReserveOrder({...state,orders:state.orders.filter(order=>order.id!==o.id)},o)){alert('Нема доволно слободна залиха за повторно активирање.');return}
   if(next==='Откажана'){
    if(o.stockDeducted&&!confirm('Количината ќе се врати во магацин. Продолжи?'))return
-   const cancelled=returnOrderStock(state,o)
-   setState(reconcileWaitingOrders({...cancelled,orders:cancelled.orders.map(order=>order.id===o.id?{...order,status:'Откажана'}:order)}))
+   const cancelled=applyOrderStatusTransition(state,o,next)
+   if(!cancelled){alert('Не може да се смени статусот.');return}
+   const reconciled=reconcileWaitingOrders(cancelled)
+   setState(reconciled)
    void recordAudit('order.cancelled','order',o.id,{number:o.number,from:o.status,stock_returned:o.stockDeducted});return
   }
-  const targetDeducted=deductStatuses.has(next)
-  if(o.stockDeducted&&!targetDeducted){
-   const restored=returnOrderStock(state,o)
-   const updated={...restored,orders:restored.orders.map(order=>order.id===o.id?{...order,status:next,stockDeducted:false}:order)}
-   setState(reconcileWaitingOrders(updated));void recordAudit('order.status_rolled_back','order',o.id,{number:o.number,from:o.status,to:next,stock_returned:true});return
-  }
-  if(targetDeducted&&!o.stockDeducted){
-   if(deductStatuses.has(o.status)){
-    setState(current=>({...current,orders:current.orders.map(order=>order.id===o.id?{...order,status:next,stockDeducted:true}:order)}))
-    void recordAudit('order.legacy_status_repaired','order',o.id,{number:o.number,from:o.status,to:next,stock_recalculated:false});return
+  const transitioned=applyOrderStatusTransition(state,o,next)
+  if(!transitioned){alert('Не може да се смени статусот.');return}
+  let finalState=transitioned
+  if((next==='Нова'||next==='Во подготовка')&&o.stockDeducted){
+   const currentOrder=finalState.orders.find(order=>order.id===o.id)
+   if(currentOrder&&!canReserveOrder({...finalState,orders:finalState.orders.filter(order=>order.id!==o.id)},currentOrder)){
+    finalState={...finalState,orders:finalState.orders.map(order=>order.id===o.id?{...order,status:'Чека залиха'}:order)}
    }
-   const updated=deductOrderStock(state,o,next);if(!updated){alert('Нема доволно залиха за оваа нарачка.');return}
-   setState(updated);void recordAudit('order.status_changed','order',o.id,{number:o.number,from:o.status,to:next});return
   }
-  setState(current=>({...current,orders:current.orders.map(order=>order.id===o.id?{...order,status:next}:order)}))
+  setState(reconcileWaitingOrders(finalState))
   void recordAudit('order.status_changed','order',o.id,{number:o.number,from:o.status,to:next})
  }
  const advanceOrder=(o:Order)=>{
@@ -263,9 +260,13 @@ function ReportsPage({state}:{state:AppState}){
   map.set(movement.orderNumber,current);return map
  },new Map<string,{p025:number;p15:number;flyers:number}>())
  const reportRows=orders.map(order=>{
-  const regular025=order.qty025*15+(order.qty025Pieces||0),gratis025=order.free025*15+(order.free025Pieces||0)
-  const regular15=order.qty15*6+(order.qty15Pieces||0),gratis15=(order.free15||0)*6+(order.free15Pieces||0)
-  const ordered025=regular025+gratis025,ordered15=regular15+gratis15
+  const quantities=orderPieces(order)
+  const regular025=quantities.p025 - (order.free025*15+(order.free025Pieces||0))
+  const gratis025=(order.free025*15)+(order.free025Pieces||0)
+  const regular15=quantities.p15 - ((order.free15||0)*6+(order.free15Pieces||0))
+  const gratis15=(order.free15||0)*6+(order.free15Pieces||0)
+  const ordered025=quantities.p025
+  const ordered15=quantities.p15
   const movementIssued=issuedByOrder.get(order.number)
   const issued025=Math.max(0,movementIssued?.p025??(order.stockDeducted?ordered025:0))
   const issued15=Math.max(0,movementIssued?.p15??(order.stockDeducted?ordered15:0))
@@ -274,12 +275,13 @@ function ReportsPage({state}:{state:AppState}){
   return {order,regular025,gratis025,ordered025,regular15,gratis15,ordered15,orderedFlyers:order.flyers,issued025,issued15,issuedFlyers,missing025}
  })
  const totals=reportRows.reduce((sum,row)=>({regular025:sum.regular025+row.regular025,gratis025:sum.gratis025+row.gratis025,ordered025:sum.ordered025+row.ordered025,regular15:sum.regular15+row.regular15,gratis15:sum.gratis15+row.gratis15,ordered15:sum.ordered15+row.ordered15,orderedFlyers:sum.orderedFlyers+row.orderedFlyers,issued025:sum.issued025+row.issued025,issued15:sum.issued15+row.issued15,issuedFlyers:sum.issuedFlyers+row.issuedFlyers}),{regular025:0,gratis025:0,ordered025:0,regular15:0,gratis15:0,ordered15:0,orderedFlyers:0,issued025:0,issued15:0,issuedFlyers:0})
+ const reservedTotals=reportRows.filter(row=>['Нова','Во подготовка'].includes(row.order.status)).reduce((sum,row)=>({ordered025:sum.ordered025+row.ordered025,ordered15:sum.ordered15+row.ordered15,orderedFlyers:sum.orderedFlyers+row.orderedFlyers}),{ordered025:0,ordered15:0,orderedFlyers:0})
  const missing025Orders=reportRows.filter(row=>row.missing025)
  const clientRows=[...reportRows.reduce((map,row)=>{const key=row.order.client.trim()||'Без клиент';const current=map.get(key)||{client:key,orders:0,ordered025:0,gratis025:0,issued025:0,ordered15:0,gratis15:0,issued15:0,orderedFlyers:0,issuedFlyers:0};current.orders+=1;current.ordered025+=row.ordered025;current.gratis025+=row.gratis025;current.issued025+=row.issued025;current.ordered15+=row.ordered15;current.gratis15+=row.gratis15;current.issued15+=row.issued15;current.orderedFlyers+=row.orderedFlyers;current.issuedFlyers+=row.issuedFlyers;map.set(key,current);return map},new Map<string,{client:string;orders:number;ordered025:number;gratis025:number;issued025:number;ordered15:number;gratis15:number;issued15:number;orderedFlyers:number;issuedFlyers:number}>()).values()].sort((a,b)=>(b.issued025+b.issued15+b.issuedFlyers)-(a.issued025+a.issued15+a.issuedFlyers))
  const resetFilters=()=>{setPeriod('all');setStatus('active');setClient('all');setCity('all');setQuery('');setFromDate('');setToDate('')}
  return <><PageHeader title="Целосен извештај"/><Card className="report-filters"><div className="report-toolbar"><label>Период<select value={period} onChange={event=>setPeriod(event.target.value as ReportPeriod)}><option value="all">Сите датуми</option><option value="month">Овој месец</option><option value="year">Оваа година</option><option value="custom">Избран период</option></select></label>{period==='custom'&&<><label>Од<input type="date" value={fromDate} onChange={event=>setFromDate(event.target.value)}/></label><label>До<input type="date" value={toDate} onChange={event=>setToDate(event.target.value)}/></label></>}<label>Статус<select value={status} onChange={event=>setStatus(event.target.value as ReportStatus)}><option value="active">Сите освен откажани</option><option value="all">Сите статуси</option><option value="Нова">Нова</option><option value="Во подготовка">Во подготовка</option><option value="Спакувана">Спакувана</option><option value="Излезена">Излезена</option><option value="Испратена">Испратена</option><option value="Доставена">Доставена</option><option value="Откажана">Откажана</option><option value="Чека залиха">Чека залиха</option></select></label><label>Клиент<select value={client} onChange={event=>setClient(event.target.value)}><option value="all">Сите клиенти</option>{clients.map(item=><option key={item}>{item}</option>)}</select></label><label>Град<select value={city} onChange={event=>setCity(event.target.value)}><option value="all">Сите градови</option>{cities.map(item=><option key={item}>{item}</option>)}</select></label><label className="report-search">Пребарај<input placeholder="Број, клиент или град" value={query} onChange={event=>setQuery(event.target.value)}/></label><button className="ghost" onClick={resetFilters}>Исчисти филтри</button></div></Card>
  {missing025Orders.length>0&&<Card><div className="stock-validation warning"><CloudOff size={18}/><span><b>Контрола на податоци:</b> {missing025Orders.length} нарачки немаат внесено Шише 0.250 мл: {missing025Orders.map(row=>row.order.number).join(', ')}.</span></div></Card>}
- <div className="report-grid"><Card className="report-total"><span>Нарачано {productName('p025')}</span><strong>{totals.ordered025} шишиња</strong><small>Редовно {totals.regular025} • гратис {totals.gratis025}</small></Card><Card className="report-total"><span>Реално издадено {productName('p025')}</span><strong>{totals.issued025} шишиња</strong><small>{Math.floor(totals.issued025/15)} пак. + {totals.issued025%15} пар.</small></Card><Card className="report-total"><span>Нарачано {productName('p15')}</span><strong>{totals.ordered15} БиБ</strong><small>Редовно {totals.regular15} • гратис {totals.gratis15}</small></Card><Card className="report-total"><span>Реално издадено {productName('p15')}</span><strong>{totals.issued15} БиБ</strong><small>{Math.floor(totals.issued15/6)} пак. + {totals.issued15%6} пар.</small></Card><Card className="report-total"><span>Нарачани флаери</span><strong>{totals.orderedFlyers}</strong><small>Според нарачките</small></Card><Card className="report-total"><span>Реално издадени флаери</span><strong>{totals.issuedFlyers}</strong><small>Според магацински излези</small></Card><Card className="report-total"><span>Нарачки во извештај</span><strong>{orders.length}</strong><small>Според избраните филтри</small></Card></div>
+ <div className="report-grid"><Card className="report-total"><span>Нарачано {productName('p025')}</span><strong>{totals.ordered025} шишиња</strong><small>Редовно {totals.regular025} • гратис {totals.gratis025}</small></Card><Card className="report-total"><span>Реално издадено {productName('p025')}</span><strong>{totals.issued025} шишиња</strong><small>{Math.floor(totals.issued025/15)} пак. + {totals.issued025%15} пар.</small></Card><Card className="report-total"><span>Резервирано {productName('p025')}</span><strong>{reservedTotals.ordered025} шишиња</strong><small>Нова и Во подготовка</small></Card><Card className="report-total"><span>Нарачано {productName('p15')}</span><strong>{totals.ordered15} БиБ</strong><small>Редовно {totals.regular15} • гратис {totals.gratis15}</small></Card><Card className="report-total"><span>Реално издадено {productName('p15')}</span><strong>{totals.issued15} БиБ</strong><small>{Math.floor(totals.issued15/6)} пак. + {totals.issued15%6} пар.</small></Card><Card className="report-total"><span>Резервирано {productName('p15')}</span><strong>{reservedTotals.ordered15} БиБ</strong><small>Нова и Во подготовка</small></Card><Card className="report-total"><span>Нарачани флаери</span><strong>{totals.orderedFlyers}</strong><small>Според нарачките</small></Card><Card className="report-total"><span>Реално издадени флаери</span><strong>{totals.issuedFlyers}</strong><small>Според магацински излези</small></Card><Card className="report-total"><span>Резервирани флаери</span><strong>{reservedTotals.orderedFlyers}</strong><small>Нова и Во подготовка</small></Card><Card className="report-total"><span>Нарачки во извештај</span><strong>{orders.length}</strong><small>Според избраните филтри</small></Card></div>
  <Card><div className="section-title"><div><h3>Детален извештај по нарачка</h3><p>Нарачано и реално издадено се прикажани одделно.</p></div></div>{reportRows.length===0?<Empty text="Нема нарачки за избраните филтри."/>:<div className="table-wrap"><table><thead><tr><th>Датум</th><th>Нарачка</th><th>Клиент</th><th>Град</th><th>Статус</th><th>0,250 редовно</th><th>0,250 гратис</th><th>0,250 нарачано</th><th>0,250 издадено</th><th>BiB редовно</th><th>BiB гратис</th><th>BiB нарачано</th><th>BiB издадено</th><th>Флаери нарачано</th><th>Флаери издадено</th></tr></thead><tbody>{reportRows.map(row=><tr key={row.order.id}><td>{row.order.date}</td><td><b>{row.order.number}</b>{row.missing025&&<><br/><small>⚠ Нема 0,250</small></>}</td><td>{row.order.client}</td><td>{row.order.city}</td><td><span className={statusClass(row.order.status)}>{row.order.status}</span></td><td>{row.regular025}</td><td>{row.gratis025}</td><td><b>{row.ordered025}</b></td><td><b>{row.issued025}</b></td><td>{row.regular15}</td><td>{row.gratis15}</td><td><b>{row.ordered15}</b></td><td><b>{row.issued15}</b></td><td>{row.orderedFlyers}</td><td><b>{row.issuedFlyers}</b></td></tr>)}</tbody><tfoot><tr><th colSpan={5}>ВКУПНО</th><th>{totals.regular025}</th><th>{totals.gratis025}</th><th>{totals.ordered025}</th><th>{totals.issued025}</th><th>{totals.regular15}</th><th>{totals.gratis15}</th><th>{totals.ordered15}</th><th>{totals.issued15}</th><th>{totals.orderedFlyers}</th><th>{totals.issuedFlyers}</th></tr></tfoot></table></div>}</Card>
  <Card><div className="section-title"><div><h3>Збирно по клиент</h3><p>Нарачано, гратис и реално издадено по клиент.</p></div></div>{clientRows.length===0?<Empty text="Нема податоци."/>:<div className="table-wrap"><table><thead><tr><th>Клиент</th><th>Нарачки</th><th>0,250 нарачано</th><th>0,250 гратис</th><th>0,250 издадено</th><th>BiB нарачано</th><th>BiB гратис</th><th>BiB издадено</th><th>Флаери нарачано</th><th>Флаери издадено</th></tr></thead><tbody>{clientRows.map(row=><tr key={row.client}><td><b>{row.client}</b></td><td>{row.orders}</td><td>{row.ordered025}</td><td>{row.gratis025}</td><td>{row.issued025}</td><td>{row.ordered15}</td><td>{row.gratis15}</td><td>{row.issued15}</td><td>{row.orderedFlyers}</td><td>{row.issuedFlyers}</td></tr>)}</tbody></table></div>}</Card></>
 }
