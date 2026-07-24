@@ -1,5 +1,5 @@
 import type { AppState, Client, Movement, Order, StockUnit } from '../types'
-import { available } from './logic'
+import { orderPieces } from './logic'
 
 export class StateMergeError extends Error {}
 
@@ -69,14 +69,28 @@ const dedupeClients=(clients:Client[],remote:Client[])=>{
  return clients.filter(client=>{const name=client.name.trim().toLowerCase();if(seen.has(name))return false;const preferred=remoteNames.get(name);if(preferred&&preferred!==client.id)return false;seen.add(name);return true})
 }
 
-const shortages=(state:AppState)=>{const free=available(state);return {p025:Math.max(0,-free.p025),p15:Math.max(0,-free.p15),flyers:Math.max(0,-free.flyers)}}
+const combinedReservationDemand=(local:AppState,remote:AppState)=>{
+  const total={p025:0,p15:0,flyers:0}
+  ;[...local.orders, ...remote.orders].filter(order=>order.status==='Нова'||order.status==='Во подготовка').forEach(order=>{
+    const need=orderPieces(order)
+    total.p025 += need.p025
+    total.p15 += need.p15
+    total.flyers += need.flyers
+  })
+  return total
+}
 
 export const mergeConcurrentStates=(base:AppState,local:AppState,remote:AppState):AppState=>{
  const orders=renumberDuplicateOrders(mergeEntities(base.orders,local.orders,remote.orders,'нарачката'),remote.orders)
  const movements=renumberDuplicateReceipts(mergeEntities(base.movements,local.movements,remote.movements,'движењето'),base.movements,remote.movements)
  const clients=dedupeClients(mergeEntities(base.clients,local.clients,remote.clients,'клиентот'),remote.clients)
  const merged:AppState={warehouse:mergeWarehouse(base.warehouse,local.warehouse,remote.warehouse),orders,clients,movements}
- const mergedShortage=shortages(merged),localShortage=shortages(local),remoteShortage=shortages(remote)
- for(const product of ['p025','p15','flyers'] as const)if(mergedShortage[product]>Math.max(localShortage[product],remoteShortage[product]))throw new StateMergeError('Две локации резервираа иста залиха во ист момент. Последната нарачка не е зачувана; провери ја новата слободна количина.')
+ const demand=combinedReservationDemand(local,remote)
+ const baseAvailable={
+  p025: base.warehouse.p025.total,
+  p15: base.warehouse.p15.total,
+  flyers: base.warehouse.flyers,
+ }
+ for(const product of ['p025','p15','flyers'] as const)if(demand[product]>baseAvailable[product])throw new StateMergeError('Две локации резервираа иста залиха во ист момент. Последната нарачка не е зачувана; провери ја новата слободна количина.')
  return merged
 }

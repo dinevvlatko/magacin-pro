@@ -1,0 +1,168 @@
+import { describe, expect, it } from 'vitest'
+import type { AppState, Order, Movement, Warehouse } from '../types'
+import {
+  calculateWarehouseSnapshot,
+  changeOrderStatus,
+  getItemQuantity,
+  getProductPackageSize,
+  normalizeWarehouseTotals,
+  type WarehouseAlertSummary,
+} from './logic'
+
+const makeOrder = (overrides: Partial<Order> = {}): Order => ({
+  id: overrides.id ?? 'order-1',
+  number: overrides.number ?? 'PG-2026-0001',
+  client: overrides.client ?? 'Клиент',
+  city: overrides.city ?? 'Скопје',
+  date: overrides.date ?? '2026-07-24',
+  qty025: overrides.qty025 ?? 0,
+  qty025Pieces: overrides.qty025Pieces ?? 0,
+  qty15: overrides.qty15 ?? 0,
+  qty15Pieces: overrides.qty15Pieces ?? 0,
+  free025: overrides.free025 ?? 0,
+  free025Pieces: overrides.free025Pieces ?? 0,
+  free15: overrides.free15 ?? 0,
+  free15Pieces: overrides.free15Pieces ?? 0,
+  flyers: overrides.flyers ?? 0,
+  note: overrides.note ?? '',
+  status: overrides.status ?? 'Нова',
+  packed: overrides.packed ?? { regular025: false, bib15: false, free025: false, free15: false, flyers: false },
+  stockDeducted: overrides.stockDeducted ?? false,
+})
+
+const makeMovement = (overrides: Partial<Movement> = {}): Movement => ({
+  id: overrides.id ?? 'movement-1',
+  date: overrides.date ?? '2026-07-24',
+  product: overrides.product ?? 'p025',
+  type: overrides.type ?? 'Влез',
+  packages: overrides.packages ?? 0,
+  pieces: overrides.pieces ?? 0,
+  party: overrides.party ?? 'Тим',
+  orderNumber: overrides.orderNumber ?? '',
+  note: overrides.note ?? '',
+})
+
+describe('warehouse engine', () => {
+  it('uses the fixed package sizes for all products', () => {
+    expect(getProductPackageSize('p025')).toBe(15)
+    expect(getProductPackageSize('p15')).toBe(6)
+    expect(getProductPackageSize('flyers')).toBe(1)
+  })
+
+  it('calculates item totals with regular and free quantities', () => {
+    expect(getItemQuantity('p025', { packages: 2, pieces: 4, freePackages: 1, freePieces: 3 })).toEqual(2 * 15 + 4 + 1 * 15 + 3)
+    expect(getItemQuantity('p15', { packages: 1, pieces: 2, freePackages: 1, freePieces: 0 })).toEqual(1 * 6 + 2 + 1 * 6 + 0)
+    expect(getItemQuantity('flyers', { packages: 0, pieces: 5, freePackages: 0, freePieces: 0 })).toEqual(5)
+  })
+
+  it('reserves only new and in-progress orders, and leaves waiting orders unreserved', () => {
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 10, pieces: 0, total: 150, perPackage: 15 },
+        p15: { packages: 10, pieces: 0, total: 60, perPackage: 6 },
+        flyers: 50,
+      },
+      orders: [
+        makeOrder({ id: 'waiting', number: 'PG-2026-0002', status: 'Чека залиха', qty025: 2 }),
+        makeOrder({ id: 'new', number: 'PG-2026-0003', status: 'Нова', qty025: 2 }),
+        makeOrder({ id: 'prep', number: 'PG-2026-0004', status: 'Во подготовка', qty025: 2 }),
+      ],
+      clients: [],
+      movements: [],
+    }
+
+    const snapshot = calculateWarehouseSnapshot(state)
+
+    expect(snapshot.reserved_stock.p025).toBe(60)
+    expect(snapshot.available_stock.p025).toBe(90)
+  })
+
+  it('deducts an order stock exactly once when it becomes packed', () => {
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 10, pieces: 0, total: 150, perPackage: 15 },
+        p15: { packages: 10, pieces: 0, total: 60, perPackage: 6 },
+        flyers: 50,
+      },
+      orders: [makeOrder({ id: 'packed', status: 'Нова', qty025: 2, packed: { regular025: true, bib15: true, free025: true, free15: true, flyers: true } })],
+      clients: [],
+      movements: [],
+    }
+
+    const next = changeOrderStatus(state, state.orders[0], 'Спакувана')
+    expect(next?.orders[0].stockDeducted).toBe(true)
+    expect(next?.warehouse.p025.total).toBe(120)
+  })
+
+  it('keeps sent-to-delivered as status-only without changing warehouse', () => {
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 10, pieces: 0, total: 150, perPackage: 15 },
+        p15: { packages: 10, pieces: 0, total: 60, perPackage: 6 },
+        flyers: 50,
+      },
+      orders: [makeOrder({ id: 'sent', status: 'Испратена', qty025: 2, stockDeducted: true })],
+      clients: [],
+      movements: [],
+    }
+
+    const next = changeOrderStatus(state, state.orders[0], 'Доставена')
+    expect(next?.orders[0].status).toBe('Доставена')
+    expect(next?.warehouse.p025.total).toBe(150)
+  })
+
+  it('hydrates old deducted statuses without subtracting stock again', () => {
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 10, pieces: 0, total: 150, perPackage: 15 },
+        p15: { packages: 10, pieces: 0, total: 60, perPackage: 6 },
+        flyers: 50,
+      },
+      orders: [makeOrder({ id: 'legacy', status: 'Испратена', qty025: 2, stockDeducted: false })],
+      clients: [],
+      movements: [],
+    }
+
+    const next = normalizeWarehouseTotals(state)
+    const order = next.orders[0]
+
+    expect(order.stockDeducted).toBe(true)
+    expect(next.warehouse.p025.total).toBe(150)
+  })
+
+  it('applies receipt delta atomically and increases warehouse totals', () => {
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 10, pieces: 0, total: 150, perPackage: 15 },
+        p15: { packages: 10, pieces: 0, total: 60, perPackage: 6 },
+        flyers: 50,
+      },
+      orders: [],
+      clients: [],
+      movements: [makeMovement({ id: 'move-1', product: 'p025', type: 'Влез', packages: 1, pieces: 0, orderNumber: 'PR-0001' })],
+    }
+
+    const snapshot = calculateWarehouseSnapshot(state)
+    expect(snapshot.physical_stock.p025).toBe(165)
+    expect(snapshot.received_stock.p025).toBe(15)
+  })
+
+  it('does not double-count stock when an order is cancelled twice', () => {
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 10, pieces: 0, total: 150, perPackage: 15 },
+        p15: { packages: 10, pieces: 0, total: 60, perPackage: 6 },
+        flyers: 50,
+      },
+      orders: [makeOrder({ id: 'cancel', status: 'Спакувана', qty025: 2, stockDeducted: true })],
+      clients: [],
+      movements: [],
+    }
+
+    const first = changeOrderStatus(state, state.orders[0], 'Откажана')
+    const second = changeOrderStatus(first!, first!.orders[0], 'Откажана')
+
+    expect(first?.warehouse.p025.total).toBe(180)
+    expect(second?.warehouse.p025.total).toBe(180)
+  })
+})
