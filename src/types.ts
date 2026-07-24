@@ -1,4 +1,4 @@
-export type OrderStatus = 'Чека залиха'|'Нова'|'Во подготовка'|'Спакувана'|'Излезена'|'Испратена'|'Доставена'|'Откажана'
+export type OrderStatus = 'Чека залиха'|'Нова'|'Во подготовка'|'Спакувана'|'Излезена'|'Испратена'|'Доставена'|'Откажана'|'Вратена'
 export type ProductKey = 'p025'|'p15'|'flyers'
 export type MovementType = 'Влез'|'Излез'|'Корекција'|'Враќање'|'Оштетување'
 export interface StockUnit { packages:number; pieces:number; total:number; perPackage:number }
