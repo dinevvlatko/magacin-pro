@@ -1,6 +1,6 @@
 import { describe,expect,it } from 'vitest'
 import type { AppState,Order } from '../types'
-import { allPacked, available, canReplaceOrder, canReserveOrder, deductOrderStock, hydrateState, reconcileWaitingOrders, returnOrderStock } from './logic'
+import { allPacked, applyOrderStatusTransition, available, canReplaceOrder, canReserveOrder, deductOrderStock, hydrateState, orderPieces, reconcileWaitingOrders, reserved, returnOrderStock } from './logic'
 import { mergeConcurrentStates,StateMergeError } from './stateMerge'
 import { orderQrUrl } from './orderQr'
 import { formatDocumentDate } from './date'
@@ -68,6 +68,13 @@ describe('stock safeguards',()=>{
   expect(restored.orders[0].status).toBe('Откажана')
   expect(restored.movements.some(item=>item.type==='Враќање')).toBe(true)
  })
+ it('does not double-return stock when cancel is attempted again',()=>{
+  const original=order('one','PG-2026-0001'),packed=deductOrderStock(state([original]),original,'Спакувана')!
+  const restored=returnOrderStock(packed,packed.orders[0])
+  const again=returnOrderStock(restored,{...packed.orders[0],stockDeducted:true})
+  expect(again.warehouse.p025.total).toBe(restored.warehouse.p025.total)
+  expect(again.orders[0].stockDeducted).toBe(false)
+ })
  it('deducts and restores free BiB together with regular BiB',()=>{
   const original={...order('bib','PG-2026-0001'),free15:2,free15Pieces:1}
   const packed=deductOrderStock(state([original]),original,'Спакувана')!
@@ -83,6 +90,31 @@ describe('stock safeguards',()=>{
  it('does not require zero-quantity rows to be checked',()=>{
   const oneItem={...order('one','PG-2026-0001'),packed:{regular025:true,bib15:false,free025:false,free15:false,flyers:false}}
   expect(allPacked(oneItem)).toBe(true)
+ })
+ it('keeps sent-to-delivered transitions as status-only and leaves warehouse unchanged',()=>{
+  const original={...order('sent','PG-2026-0001'),status:'Испратена' as const}
+  const updated=applyOrderStatusTransition(state([original]),original,'Доставена')
+  expect(updated).not.toBeNull()
+  expect(updated?.orders[0].status).toBe('Доставена')
+  expect(updated?.orders[0].stockDeducted).toBe(false)
+  expect(updated?.warehouse.p025.total).toBe(1500)
+ })
+ it('migrates old sent orders without re-deducting stock on hydrate',()=>{
+  const original={...order('legacy','PG-2026-0001'),status:'Испратена' as const,stockDeducted:false}
+  const hydrated=hydrateState(state([original]))
+  expect(hydrated.orders[0].stockDeducted).toBe(true)
+  expect(hydrated.warehouse.p025.total).toBe(1500)
+ })
+ it('counts reserved quantities only for new and in-preparation orders',()=>{
+  const newOrder={...order('new','PG-2026-0001',1),status:'Нова' as const}
+  const prepOrder={...order('prep','PG-2026-0002',1),status:'Во подготовка' as const}
+  const packedOrder={...order('packed','PG-2026-0003',1),status:'Спакувана' as const,stockDeducted:true}
+  const reservedTotal=reserved(state([newOrder,prepOrder,packedOrder]))
+  expect(reservedTotal.p025).toBe(30)
+ })
+ it('uses 15 units per p025 package and 6 units per BiB package',()=>{
+  const item={...order('pkg','PG-2026-0001',2),qty025Pieces:0,qty15Pieces:0,free025:1,free15:1}
+  expect(orderPieces(item)).toEqual({p025:45,p15:6,flyers:0})
  })
  it('creates one deep link QR for the complete order',()=>expect(orderQrUrl('order-123','https://magacin-pro-ten.vercel.app')).toBe('https://magacin-pro-ten.vercel.app/?order=order-123'))
  it('removes the former package-scan archive while loading data',()=>{
