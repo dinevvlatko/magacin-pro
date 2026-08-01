@@ -5,6 +5,7 @@ import { demoState, makeOrderNumber } from './lib/data'
 import { activeStatuses, allowedTransitions, allPacked, applyOrderStatusTransition, available, breakdown, canReserveOrder, deductOrderStock, hydrateState, normalize, orderPieces, productName, reconcileWaitingOrders, reservationShortage, reserved, returnOrderStock, updatePackedItem } from './lib/logic'
 import { supabase, syncEnabled } from './lib/supabase'
 import { useSyncedState, type SyncStatus } from './lib/useSyncedState'
+import { blockedAccessMessage } from './lib/accessControl'
 import { appVersion } from './pwa'
 import { BottomNav, SideNav } from './components/Nav'
 import { Card, Empty, Field, Modal, PageHeader } from './components/UI'
@@ -16,6 +17,7 @@ import { createOrderQrDataUrl } from './lib/orderQr'
 import { createReceiptAtomic, loadReceiptModule, receiptItemUnits, ReceiptSchemaMissingError, validateReceiptItems, type ProductRecord, type ReceiptInput, type ReceiptItemDraft } from './lib/receipts'
 import { BrandLockup, BrandMark } from './components/Brand'
 import './index.css'
+import './components/AdminPage.css'
 
 const statusClass=(s:OrderStatus)=>`status ${s.replaceAll(' ','-').toLowerCase()}`
 const todayLocal=()=>{const date=new Date();return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`}
@@ -31,7 +33,7 @@ const localMode=!syncEnabled||localDemo
 type ReceiptModuleStatus='loading'|'ready'|'missing'|'error'
 
 function App(){
- const {state,setState,session,profile,authReady,syncStatus,syncError,recordAudit}=useSyncedState()
+ const {state,setState,session,profile,access,authReady,syncStatus,syncError,recordAudit}=useSyncedState()
  const [page,setPage]=useState('dashboard')
  const [selected,setSelected]=useState<string|null>(null)
  const [showOrder,setShowOrder]=useState(false)
@@ -55,8 +57,7 @@ function App(){
  const editingOrder=state.orders.find(o=>o.id===editingOrderId)||null
  const editingReceipt=receiptGroups(state.movements).find(receipt=>receipt.number===editingReceiptNumber)||null
  const r=useMemo(()=>reserved(state),[state]); const a=useMemo(()=>available(state),[state])
- const adminEmail=(session?.user.email||profile?.email||'').toLowerCase()
- const isAdmin=profile?.role==='admin'||adminEmail==='vlatko_dinev@hotmail.com'
+ const isAdmin=profile?.role==='admin'&&profile.active
  const refreshReceiptProducts=useCallback(async()=>{
   const module=await loadReceiptModule()
   setProducts(module.products)
@@ -75,7 +76,9 @@ function App(){
  },[localMode,refreshReceiptProducts,session])
  useEffect(()=>{if(linkedOrderHandled||!linkedOrderId)return;const linked=state.orders.find(order=>order.id===linkedOrderId);if(linked){setSelected(linked.id);setPage('packing');setLinkedOrderHandled(true)}},[linkedOrderHandled,linkedOrderId,state.orders])
  if(!authReady&&!localMode)return <div className="auth-shell"><div className="auth-card"><BrandLockup/><p>Се поврзува со заедничката база...</p></div></div>
+ if(access==='blocked'&&!localMode)return <AuthScreen accessMessage={blockedAccessMessage}/>
  if(!session&&!localMode)return <AuthScreen/>
+ if(access==='checking'&&!localMode)return <div className="auth-shell"><div className="auth-card"><BrandLockup/><p>Се проверува корисничкиот пристап...</p></div></div>
  const patchPacked=(o:Order,key:keyof Order['packed'],value:boolean)=>{
   const updated=updatePackedItem(state,o.id,key,value)
   if(!updated){alert('Нема доволно залиха за оваа нарачка.');return}
@@ -188,7 +191,7 @@ function App(){
  </div>
 }
 
-function AuthScreen(){
+function AuthScreen({accessMessage}:{accessMessage?:string}){
  const [fullName,setFullName]=useState('')
  const [email,setEmail]=useState('')
  const [password,setPassword]=useState('')
@@ -204,7 +207,7 @@ function AuthScreen(){
   if(result.error){setMessage(result.error.message);return}
   if(mode==='signup'&&!result.data.session)setMessage('Провери ја е-поштата и потврди ја регистрацијата, па најави се.')
  }
- return <div className="auth-shell"><form className="auth-card" onSubmit={submit}><BrandLockup/><h1>{mode==='login'?'Најава':'Нов профил'}</h1><p>Секој вработен користи свој профил, а сите работат во истиот заеднички магацин.</p>{mode==='signup'&&<label>Име и презиме<input required autoComplete="name" value={fullName} onChange={e=>setFullName(e.target.value)}/></label>}<label>Е-пошта<input type="email" required autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)}/></label><label>Лозинка<input type="password" required minLength={6} autoComplete={mode==='login'?'current-password':'new-password'} value={password} onChange={e=>setPassword(e.target.value)}/></label>{message&&<div className="auth-message">{message}</div>}<button className="primary auth-submit" disabled={busy}><LogIn size={18}/>{busy?'Почекај...':mode==='login'?'Најави се':'Регистрирај се'}</button><button type="button" className="auth-switch" onClick={()=>{setMode(mode==='login'?'signup':'login');setMessage('')}}>{mode==='login'?'Немаш профил? Регистрирај се':'Имаш профил? Најави се'}</button></form></div>
+ return <div className="auth-shell"><form className="auth-card" onSubmit={submit}><BrandLockup/><h1>{mode==='login'?'Најава':'Нов профил'}</h1><p>Секој вработен користи свој профил, а сите работат во истиот заеднички магацин.</p>{mode==='signup'&&<label>Име и презиме<input required autoComplete="name" value={fullName} onChange={e=>setFullName(e.target.value)}/></label>}<label>Е-пошта<input type="email" required autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)}/></label><label>Лозинка<input type="password" required minLength={6} autoComplete={mode==='login'?'current-password':'new-password'} value={password} onChange={e=>setPassword(e.target.value)}/></label>{(message||accessMessage)&&<div className="auth-message">{message||accessMessage}</div>}<button className="primary auth-submit" disabled={busy}><LogIn size={18}/>{busy?'Почекај...':mode==='login'?'Најави се':'Регистрирај се'}</button><button type="button" className="auth-switch" onClick={()=>{setMode(mode==='login'?'signup':'login');setMessage('')}}>{mode==='login'?'Немаш профил? Регистрирај се':'Имаш профил? Најави се'}</button></form></div>
 }
 
 function Dashboard({state,r,a,setPage,openOrder,openPacked}:{state:AppState;r:{p025:number;p15:number;flyers:number};a:{p025:number;p15:number;flyers:number};setPage:(p:string)=>void;openOrder:(id:string)=>void;openPacked:()=>void}){const packed=state.orders.filter((order:Order)=>order.status==='Спакувана').length,sent=state.orders.filter((order:Order)=>['Излезена','Испратена','Доставена'].includes(order.status)).length,waiting=state.orders.filter((order:Order)=>order.status==='Чека залиха').length;return <><PageHeader title="Контролна табла" action={<button className="primary" onClick={()=>setPage('orders')}><CirclePlus size={18}/> Нова нарачка</button>}/><div className="hero k2-hero"><div className="hero-copy"><div className="k2-hero-lockup"><BrandMark/><div><h2>K2 Vita</h2><p>Пакувај. Следи. Испорачај.</p></div></div></div><div className="pulse"><i/> Системот е активен</div></div><div className="stock-grid"><StockCard title={productName('p025')} packs={state.warehouse.p025.packages} pieces={state.warehouse.p025.pieces} total={state.warehouse.p025.total} reserved={r.p025} available={a.p025} perPackage={15} onClick={()=>setPage('warehouse')}/><StockCard title={productName('p15')} packs={state.warehouse.p15.packages} pieces={state.warehouse.p15.pieces} total={state.warehouse.p15.total} reserved={r.p15} available={a.p15} perPackage={6} onClick={()=>setPage('warehouse')}/><StockCard title="Флаери" packs={0} pieces={state.warehouse.flyers} total={state.warehouse.flyers} reserved={r.flyers} available={a.flyers} perPackage={0} onClick={()=>setPage('warehouse')}/></div><div className="metric-grid"><Metric label="Активни нарачки" value={state.orders.filter((order:Order)=>activeStatuses.has(order.status)).length} onClick={()=>setPage('orders')}/><Metric label="Чекаат залиха" value={waiting} onClick={()=>setPage('orders')}/><Metric label="Спакувани" value={packed} onClick={openPacked}/><Metric label="Испратени/излезени" value={sent} onClick={()=>setPage('movements')}/></div><Card><div className="section-title"><div><h3>Следни за пакување</h3><p>Нарачките што чекаат залиха се прикажани први</p></div><button className="ghost" onClick={()=>setPage('packing')}>Отвори пакување <ChevronRight size={16}/></button></div><div className="compact-list">{state.orders.filter((order:Order)=>activeStatuses.has(order.status)).toSorted((x:Order,y:Order)=>(x.status==='Чека залиха'?0:1)-(y.status==='Чека залиха'?0:1)).slice(0,5).map((order:Order)=><button type="button" key={order.id} onClick={()=>openOrder(order.id)}><span><strong>{order.client}</strong><small>{order.city} • {order.number}</small></span><span className={statusClass(order.status)}>{order.status}</span></button>)}</div></Card></>}

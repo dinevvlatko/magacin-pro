@@ -5,6 +5,7 @@ import { loadState, saveState } from './storage'
 import { hydrateState } from './logic'
 import { mergeConcurrentStates, StateMergeError } from './stateMerge'
 import { supabase, syncEnabled } from './supabase'
+import { blockedAccessMessage, profileAccess, type ProfileAccess } from './accessControl'
 
 export type SyncStatus = 'loading' | 'offline' | 'syncing' | 'synced' | 'error'
 export type UserRole = 'admin' | 'operator'
@@ -20,6 +21,7 @@ export function useSyncedState(){
  const [state,setState]=useState<AppState>(initial)
  const [session,setSession]=useState<Session|null>(null)
  const [profile,setProfile]=useState<UserProfile|null>(null)
+ const [access,setAccess]=useState<ProfileAccess>(syncEnabled?'checking':'allowed')
  const [authReady,setAuthReady]=useState(false)
  const [syncReady,setSyncReady]=useState(false)
  const [syncStatus,setSyncStatus]=useState<SyncStatus>('loading')
@@ -27,7 +29,7 @@ export function useSyncedState(){
  const stateRef=useRef(initial),baseStateRef=useRef(initial),baseVersionRef=useRef(''),pendingRef=useRef<PendingSave|null>(null),saveTimerRef=useRef<number|undefined>(undefined)
  const userId=session?.user.id
 
- useEffect(()=>{if(!syncEnabled){setAuthReady(true);setSyncStatus('offline');return}let active=true;void supabase.auth.getSession().then(({data})=>{if(!active)return;setSession(data.session);setAuthReady(true);if(!data.session)setSyncStatus('offline')});const {data}=supabase.auth.onAuthStateChange((_event,nextSession)=>{if(!active)return;setSession(nextSession);setAuthReady(true);if(!nextSession){setProfile(null);setSyncReady(false);setSyncStatus('offline')}});return()=>{active=false;data.subscription.unsubscribe()}},[])
+ useEffect(()=>{if(!syncEnabled){setAccess('allowed');setAuthReady(true);setSyncStatus('offline');return}let active=true;const applySession=(nextSession:Session|null)=>{if(!active)return;setSession(nextSession);setAuthReady(true);if(nextSession){setAccess('checking');return}setProfile(null);setSyncReady(false);setSyncStatus('offline')};void supabase.auth.getSession().then(({data})=>applySession(data.session));const {data}=supabase.auth.onAuthStateChange((_event,nextSession)=>applySession(nextSession));return()=>{active=false;data.subscription.unsubscribe()}},[])
  useEffect(()=>{stateRef.current=state;saveState(state)},[state])
 
  useEffect(()=>{
@@ -51,14 +53,18 @@ export function useSyncedState(){
    }
   }
 
+  const denyAccess=()=>{setProfile(null);setAccess('blocked');setSyncReady(false);setSyncStatus('error');setSyncError(blockedAccessMessage);pendingRef.current=null;if(saveTimerRef.current)window.clearTimeout(saveTimerRef.current);void supabase.auth.signOut()}
+  const acceptProfile=(nextProfile:UserProfile)=>{
+   if(!nextProfile.active){denyAccess();return false}
+   setProfile(nextProfile);setAccess(profileAccess(nextProfile));return true
+  }
   const initialize=async()=>{
    const profileRequest=supabase.from('profiles').select('id,email,full_name,role,active,created_at').eq('id',userId).single<UserProfile>()
    const stateRequest=supabase.from('shared_warehouse_state').select('id,state,updated_at,updated_by').eq('id','main').maybeSingle<SharedWarehouseRow>()
    const [{data:profileData,error:profileError},{data,error}]=await Promise.all([profileRequest,stateRequest])
    if(!active)return
    if(profileError||!profileData){setSyncStatus('error');setSyncError(profileError?.message||'Корисничкиот профил не е пронајден.');return}
-   setProfile(profileData)
-   if(!profileData.active){setSyncStatus('error');setSyncError('Овој кориснички профил е деактивиран.');return}
+   if(!acceptProfile(profileData))return
    if(error){setSyncStatus('error');setSyncError(error.message);return}
    if(data){const remote=hydrateState(data.state);baseStateRef.current=remote;baseVersionRef.current=data.updated_at;stateRef.current=remote;setState(remote);saveState(remote)}
    else{
@@ -72,8 +78,9 @@ export function useSyncedState(){
   }
 
   void initialize()
-  const channel=supabase.channel('shared-warehouse-main').on('postgres_changes',{event:'UPDATE',schema:'public',table:'shared_warehouse_state',filter:'id=eq.main'},payload=>{if(active)acceptRemote(payload.new as SharedWarehouseRow)}).subscribe()
-  return()=>{active=false;pendingRef.current=null;if(saveTimerRef.current)window.clearTimeout(saveTimerRef.current);void supabase.removeChannel(channel)}
+  const warehouseChannel=supabase.channel('shared-warehouse-main').on('postgres_changes',{event:'UPDATE',schema:'public',table:'shared_warehouse_state',filter:'id=eq.main'},payload=>{if(active)acceptRemote(payload.new as SharedWarehouseRow)}).subscribe()
+  const profileChannel=supabase.channel(`profile-access-${userId}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles',filter:`id=eq.${userId}`},payload=>{if(active)acceptProfile(payload.new as UserProfile)}).subscribe()
+  return()=>{active=false;pendingRef.current=null;if(saveTimerRef.current)window.clearTimeout(saveTimerRef.current);void supabase.removeChannel(warehouseChannel);void supabase.removeChannel(profileChannel)}
  },[userId])
 
  useEffect(()=>{
@@ -108,5 +115,5 @@ export function useSyncedState(){
  },[session,state,syncReady])
 
  const recordAudit=useCallback(async(action:string,entityType:string,entityId:string|null,details:AuditDetails={})=>{if(!userId)return;const {error}=await supabase.from('activity_log').insert({actor_id:userId,action,entity_type:entityType,entity_id:entityId,details});if(error){setSyncStatus('error');setSyncError(`Промената е зачувана, но активноста не е запишана: ${error.message}`)}},[userId])
- return {state,setState,session,profile,authReady,syncStatus,syncError,recordAudit}
+ return {state,setState,session,profile,access,authReady,syncStatus,syncError,recordAudit}
 }

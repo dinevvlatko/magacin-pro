@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { RefreshCw, ShieldCheck, UserCheck, UserX } from 'lucide-react'
+import { Ban, RefreshCw, ShieldCheck, UserCheck } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import type { UserProfile, UserRole } from '../lib/useSyncedState'
 import { Card, Empty, PageHeader } from './UI'
@@ -31,6 +31,7 @@ export function AdminPage({currentUserId}:{currentUserId:string}){
   const [activity,setActivity]=useState<ActivityRow[]>([])
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
+  const [updatingUserId,setUpdatingUserId]=useState<string|null>(null)
 
   const load=useCallback(async()=>{
     setLoading(true);setError('')
@@ -47,17 +48,27 @@ export function AdminPage({currentUserId}:{currentUserId:string}){
   useEffect(()=>{void load()},[load])
 
   const profileMap=useMemo(()=>new Map(profiles.map(profile=>[profile.id,profile])),[profiles])
-  const updateProfile=async(id:string,patch:{role?:UserRole;active?:boolean})=>{
+  const updateRole=async(id:string,role:UserRole)=>{
     const current=profiles.find(profile=>profile.id===id)
     if(!current)return
-    const {error:updateError}=await supabase.from('profiles').update(patch).eq('id',id)
+    const {error:updateError}=await supabase.from('profiles').update({role}).eq('id',id)
     if(updateError){setError(updateError.message);return}
-    const action=patch.role?'user.role_changed':'user.access_changed'
-    const details=patch.role?{email:current.email,from:current.role,to:patch.role}:{email:current.email,from:current.active,to:patch.active??current.active}
-    const {error:auditError}=await supabase.from('activity_log').insert({actor_id:currentUserId,action,entity_type:'user',entity_id:id,details})
+    const {error:auditError}=await supabase.from('activity_log').insert({actor_id:currentUserId,action:'user.role_changed',entity_type:'user',entity_id:id,details:{email:current.email,from:current.role,to:role}})
     if(auditError){setError(`Промената е зачувана, но активноста не е запишана: ${auditError.message}`)}
     await load()
   }
 
-  return <><PageHeader title="Администрација" action={<button className="ghost" onClick={()=>void load()}><RefreshCw size={17}/> Освежи</button>}/>{error&&<div className="admin-error">{error}</div>}<div className="admin-grid"><Card><div className="section-title"><div><h3>Корисници</h3><p>Улоги и пристап до заедничкиот магацин</p></div><span className="admin-count">{profiles.length}</span></div>{loading?<p className="muted">Се вчитува...</p>:profiles.length===0?<Empty text="Нема регистрирани корисници."/>:<div className="admin-users">{profiles.map(profile=><div className="admin-user" key={profile.id}><div className="avatar">{(profile.full_name||profile.email).slice(0,2).toUpperCase()}</div><div><strong>{profile.full_name||'Без внесено име'}</strong><small>{profile.email}</small></div><select value={profile.role} disabled={profile.id===currentUserId} onChange={e=>void updateProfile(profile.id,{role:e.target.value as UserRole})}><option value="operator">Оператор</option><option value="admin">Админ</option></select><button className={profile.active?'user-active':'user-inactive'} disabled={profile.id===currentUserId} onClick={()=>void updateProfile(profile.id,{active:!profile.active})}>{profile.active?<><UserCheck size={16}/> Активен</>:<><UserX size={16}/> Исклучен</>}</button></div>)}</div>}</Card><Card><div className="section-title"><div><h3>Активност</h3><p>Последни 200 промени во системот</p></div><ShieldCheck size={22}/></div>{loading?<p className="muted">Се вчитува...</p>:activity.length===0?<Empty text="Сè уште нема запишани активности."/>:<div className="activity-list">{activity.map(item=>{const actor=profileMap.get(item.actor_id);return <article key={item.id}><div><strong>{actionLabels[item.action]||item.action}</strong><span>{actor?.full_name||actor?.email||'Непознат корисник'} • {new Date(item.created_at).toLocaleString('mk-MK')}</span></div><p>{item.entity_id||item.entity_type}{Object.keys(item.details||{}).length>0?` • ${Object.entries(item.details).map(([key,value])=>`${key}: ${String(value)}`).join(', ')}`:''}</p></article>})}</div>}</Card></div></>
+  const updateAccess=async(profile:UserProfile)=>{
+    if(profile.id===currentUserId||updatingUserId)return
+    const nextActive=!profile.active
+    if(!window.confirm(nextActive?`Да се одблокира ${profile.full_name||profile.email}?`:`Да се блокира ${profile.full_name||profile.email}? Корисникот веднаш ќе биде одјавен и нема да има пристап до апликацијата.`))return
+    setError('')
+    setUpdatingUserId(profile.id)
+    const {error:updateError}=await supabase.rpc('set_user_access',{p_target_user_id:profile.id,p_active:nextActive})
+    setUpdatingUserId(null)
+    if(updateError){setError(updateError.message);return}
+    await load()
+  }
+
+  return <><PageHeader title="Администрација" action={<button className="ghost" onClick={()=>void load()}><RefreshCw size={17}/> Освежи</button>}/>{error&&<div className="admin-error">{error}</div>}<div className="admin-grid"><Card><div className="section-title"><div><h3>Корисници</h3><p>Улоги и пристап до заедничкиот магацин</p></div><span className="admin-count">{profiles.length}</span></div>{loading?<p className="muted">Се вчитува...</p>:profiles.length===0?<Empty text="Нема регистрирани корисници."/>:<div className="admin-users">{profiles.map(profile=>{const isCurrent=profile.id===currentUserId;const isUpdating=updatingUserId===profile.id;return <div className="admin-user" key={profile.id}><div className="avatar">{(profile.full_name||profile.email).slice(0,2).toUpperCase()}</div><div><strong>{profile.full_name||'Без внесено име'}</strong><small>{profile.email}</small></div><select value={profile.role} disabled={isCurrent||isUpdating} onChange={e=>void updateRole(profile.id,e.target.value as UserRole)}><option value="operator">Оператор</option><option value="admin">Админ</option></select><span className={profile.active?'user-status user-active':'user-status user-inactive'}>{profile.active?<><UserCheck size={16}/> Активен</>:<><Ban size={16}/> Блокиран</>}</span>{isCurrent?<span className="user-self">Твој профил</span>:<button className={profile.active?'user-block':'user-unblock'} disabled={isUpdating} onClick={()=>void updateAccess(profile)}>{profile.active?<><Ban size={16}/> Блокирај</>:<><UserCheck size={16}/> Одблокирај</>}</button>}</div>})}</div>}</Card><Card><div className="section-title"><div><h3>Активност</h3><p>Последни 200 промени во системот</p></div><ShieldCheck size={22}/></div>{loading?<p className="muted">Се вчитува...</p>:activity.length===0?<Empty text="Сè уште нема запишани активности."/>:<div className="activity-list">{activity.map(item=>{const actor=profileMap.get(item.actor_id);return <article key={item.id}><div><strong>{actionLabels[item.action]||item.action}</strong><span>{actor?.full_name||actor?.email||'Непознат корисник'} • {new Date(item.created_at).toLocaleString('mk-MK')}</span></div><p>{item.entity_id||item.entity_type}{Object.keys(item.details||{}).length>0?` • ${Object.entries(item.details).map(([key,value])=>`${key}: ${String(value)}`).join(', ')}`:''}</p></article>})}</div>}</Card></div></>
 }
