@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import type { AppState, Order, Movement, Warehouse } from '../types'
+import type { AppState, Order, Movement } from '../types'
 import {
   calculateWarehouseSnapshot,
   changeOrderStatus,
   getItemQuantity,
   getProductPackageSize,
   normalizeWarehouseTotals,
-  type WarehouseAlertSummary,
 } from './logic'
 
 const makeOrder = (overrides: Partial<Order> = {}): Order => ({

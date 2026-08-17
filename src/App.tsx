@@ -74,7 +74,7 @@ function App(){
    setReceiptModuleError(error instanceof Error?error.message:'Не може да се вчитаат производите за приемница.')
   })
   return()=>{active=false}
- },[localMode,refreshReceiptProducts,session])
+ },[refreshReceiptProducts,session])
  useEffect(()=>{if(linkedOrderHandled||!linkedOrderId)return;const linked=state.orders.find(order=>order.id===linkedOrderId);if(linked){setSelected(linked.id);setPage('packing');setLinkedOrderHandled(true)}},[linkedOrderHandled,linkedOrderId,state.orders])
  if(!authReady&&!localMode)return <div className="auth-shell"><div className="auth-card"><BrandLockup/><p>Се поврзува со заедничката база...</p></div></div>
  if(access==='blocked'&&!localMode)return <AuthScreen accessMessage={blockedAccessMessage}/>
@@ -230,7 +230,7 @@ function Orders({state,query,setQuery,selectedIds,setSelectedIds,onOpen,onNew,on
  const selected=loadingOrders.filter(order=>selectedIds.has(order.id))
  const totals=selected.reduce((sum,order)=>{const qty=orderPieces(order);return {p025:sum.p025+qty.p025,p15:sum.p15+qty.p15,flyers:sum.flyers+qty.flyers}},{p025:0,p15:0,flyers:0})
  const remaining={p025:state.warehouse.p025.total-totals.p025,p15:state.warehouse.p15.total-totals.p15,flyers:state.warehouse.flyers-totals.flyers}
- const toggle=(id:string)=>{const next=new Set(selectedIds);next.has(id)?next.delete(id):next.add(id);setSelectedIds(next)}
+ const toggle=(id:string)=>{const next=new Set(selectedIds);if(next.has(id))next.delete(id);else next.add(id);setSelectedIds(next)}
  const choose=(orders:Order[])=>setSelectedIds(new Set(orders.map(order=>order.id)))
  const changeView=(next:OrderView)=>{setView(next);if(next!=='loading')setSelectedIds(new Set())}
  const counts=Object.fromEntries((Object.keys(orderViewLabels) as OrderView[]).map(key=>[key,state.orders.filter(order=>orderMatchesView(order,key)).length])) as Record<OrderView,number>
