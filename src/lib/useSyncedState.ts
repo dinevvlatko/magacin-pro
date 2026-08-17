@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import type { AppState } from '../types'
-import { loadState, saveState } from './storage'
+import { clearPreSyncBackup, loadPreSyncBackup, loadState, markSharedSyncReady, preservePreSyncBackup, saveState, type LocalStateBackup } from './storage'
 import { hydrateState } from './logic'
 import { mergeConcurrentStates, StateMergeError } from './stateMerge'
+import { mergeIndependentStates } from './stateImport'
 import { supabase, syncEnabled } from './supabase'
 import { blockedAccessMessage, profileAccess, type ProfileAccess } from './accessControl'
 
@@ -26,6 +27,7 @@ export function useSyncedState(){
  const [syncReady,setSyncReady]=useState(false)
  const [syncStatus,setSyncStatus]=useState<SyncStatus>('loading')
  const [syncError,setSyncError]=useState('')
+ const [localBackup,setLocalBackup]=useState<LocalStateBackup|null>(()=>loadPreSyncBackup())
  const stateRef=useRef(initial),baseStateRef=useRef(initial),baseVersionRef=useRef(''),pendingRef=useRef<PendingSave|null>(null),saveTimerRef=useRef<number|undefined>(undefined)
  const userId=session?.user.id
 
@@ -52,6 +54,12 @@ export function useSyncedState(){
     baseStateRef.current=remote;baseVersionRef.current=row.updated_at;stateRef.current=remote;setState(remote);setSyncStatus('error');setSyncError(error instanceof Error?error.message:'Истовремената промена не може безбедно да се спои.')
    }
   }
+  const adoptInitialRemote=(row:SharedWarehouseRow)=>{
+   const remote=hydrateState(row.state)
+   const backup=preservePreSyncBackup(hydrateState(stateRef.current),remote)
+   if(backup)setLocalBackup(backup)
+   baseStateRef.current=remote;baseVersionRef.current=row.updated_at;stateRef.current=remote;setState(remote);saveState(remote);markSharedSyncReady()
+  }
 
   const denyAccess=()=>{setProfile(null);setAccess('blocked');setSyncReady(false);setSyncStatus('error');setSyncError(blockedAccessMessage);pendingRef.current=null;if(saveTimerRef.current)window.clearTimeout(saveTimerRef.current);void supabase.auth.signOut()}
   const acceptProfile=(nextProfile:UserProfile)=>{
@@ -66,13 +74,13 @@ export function useSyncedState(){
    if(profileError||!profileData){setSyncStatus('error');setSyncError(profileError?.message||'Корисничкиот профил не е пронајден.');return}
    if(!acceptProfile(profileData))return
    if(error){setSyncStatus('error');setSyncError(error.message);return}
-   if(data){const remote=hydrateState(data.state);baseStateRef.current=remote;baseVersionRef.current=data.updated_at;stateRef.current=remote;setState(remote);saveState(remote)}
+   if(data)adoptInitialRemote(data)
    else{
     const local=hydrateState(loadState()),updatedAt=new Date().toISOString()
     const {data:created,error:insertError}=await supabase.from('shared_warehouse_state').insert({id:'main',state:local,updated_at:updatedAt,updated_by:userId}).select('id,state,updated_at,updated_by').maybeSingle<SharedWarehouseRow>()
-    if(insertError?.code==='23505'){const {data:existing,error:existingError}=await supabase.from('shared_warehouse_state').select('id,state,updated_at,updated_by').eq('id','main').single<SharedWarehouseRow>();if(existingError||!existing){setSyncStatus('error');setSyncError(existingError?.message||'Не може да се вчита заедничкиот магацин.');return}const remote=hydrateState(existing.state);baseStateRef.current=remote;baseVersionRef.current=existing.updated_at;stateRef.current=remote;setState(remote);saveState(remote)}
+    if(insertError?.code==='23505'){const {data:existing,error:existingError}=await supabase.from('shared_warehouse_state').select('id,state,updated_at,updated_by').eq('id','main').single<SharedWarehouseRow>();if(existingError||!existing){setSyncStatus('error');setSyncError(existingError?.message||'Не може да се вчита заедничкиот магацин.');return}adoptInitialRemote(existing)}
     else if(insertError||!created){setSyncStatus('error');setSyncError(insertError?.message||'Не може да се креира заедничкиот магацин.');return}
-    else{baseStateRef.current=local;baseVersionRef.current=created.updated_at;stateRef.current=local;setState(local)}
+    else{baseStateRef.current=local;baseVersionRef.current=created.updated_at;stateRef.current=local;setState(local);markSharedSyncReady()}
    }
    setSyncReady(true);setSyncStatus('synced')
   }
@@ -114,6 +122,28 @@ export function useSyncedState(){
   return()=>{if(saveTimerRef.current)window.clearTimeout(saveTimerRef.current)}
  },[session,state,syncReady])
 
+ const reconcileLocalBackup=useCallback(async(mode:'merge'|'replace'|'discard')=>{
+  if(mode==='discard'){clearPreSyncBackup();setLocalBackup(null);markSharedSyncReady();return true}
+  if(!session||!localBackup||!syncReady||syncStatus!=='synced'){setSyncError('Почекај прво да заврши тековната синхронизација.');return false}
+  if(mode==='replace'&&profile?.role!=='admin'){setSyncError('Само администратор може да ја постави локалната верзија како главна.');return false}
+  if(saveTimerRef.current)window.clearTimeout(saveTimerRef.current)
+  pendingRef.current={state:stateRef.current,baseVersion:baseVersionRef.current};setSyncStatus('syncing');setSyncError('')
+  for(let attempt=0;attempt<4;attempt+=1){
+   const {data:latest,error:fetchError}=await supabase.from('shared_warehouse_state').select('id,state,updated_at,updated_by').eq('id','main').single<SharedWarehouseRow>()
+   if(fetchError||!latest){pendingRef.current=null;setSyncStatus('error');setSyncError(fetchError?.message||'Не може да се вчита последната заедничка верзија.');return false}
+   const remote=hydrateState(latest.state)
+   const candidate=mode==='replace'?hydrateState(localBackup.state):mergeIndependentStates(remote,localBackup.state)
+   const updatedAt=new Date().toISOString()
+   const {data:updated,error:updateError}=await supabase.from('shared_warehouse_state').update({state:candidate,updated_at:updatedAt,updated_by:session.user.id}).eq('id','main').eq('updated_at',latest.updated_at).select('id,state,updated_at,updated_by').maybeSingle<SharedWarehouseRow>()
+   if(updateError){pendingRef.current=null;setSyncStatus('error');setSyncError(updateError.message);return false}
+   if(!updated)continue
+   pendingRef.current=null;baseStateRef.current=candidate;baseVersionRef.current=updated.updated_at;stateRef.current=candidate;setState(candidate);saveState(candidate);clearPreSyncBackup();setLocalBackup(null);markSharedSyncReady();setSyncStatus('synced');setSyncError('')
+   void supabase.from('activity_log').insert({actor_id:session.user.id,action:mode==='replace'?'app.local_state_replaced':'app.local_state_merged',entity_type:'app',entity_id:null,details:{backup_saved_at:localBackup.savedAt}})
+   return true
+  }
+  pendingRef.current=null;setSyncStatus('error');setSyncError('Во меѓувреме има друга промена. Почекај неколку секунди и обиди се повторно.');return false
+ },[localBackup,profile?.role,session,syncReady,syncStatus])
+
  const recordAudit=useCallback(async(action:string,entityType:string,entityId:string|null,details:AuditDetails={})=>{if(!userId)return;const {error}=await supabase.from('activity_log').insert({actor_id:userId,action,entity_type:entityType,entity_id:entityId,details});if(error){setSyncStatus('error');setSyncError(`Промената е зачувана, но активноста не е запишана: ${error.message}`)}},[userId])
- return {state,setState,session,profile,access,authReady,syncStatus,syncError,recordAudit}
+ return {state,setState,session,profile,access,authReady,syncStatus,syncError,localBackup,reconcileLocalBackup,recordAudit}
 }

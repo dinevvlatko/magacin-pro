@@ -22,6 +22,8 @@ const actionLabels:Record<string,string>={
   'stock.movement':'Движење на залиха',
   'stock.receipt':'Креирана приемница',
   'app.demo_reset':'Ресетирани демо податоци',
+  'app.local_state_merged':'Споена локална верзија',
+  'app.local_state_replaced':'Поставена локална главна верзија',
   'user.role_changed':'Променета корисничка улога',
   'user.access_changed':'Променет кориснички пристап',
 }

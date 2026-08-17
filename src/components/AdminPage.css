@@ -2,6 +2,21 @@
   grid-template-columns: auto minmax(150px, 1fr) 120px auto 132px;
 }
 
+.settings-card .page-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 760px) {
+  .settings-card .page-actions {
+    width: 100%;
+  }
+
+  .settings-card .page-actions button {
+    width: 100%;
+  }
+}
+
 .admin-user .user-status,
 .admin-user .user-self {
   min-height: 40px;
