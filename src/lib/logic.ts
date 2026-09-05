@@ -287,6 +287,10 @@ export const reservationShortage=(s:AppState,o:Order)=>{
   return {p025:Math.max(0,need.p025-Math.max(0,free.p025)),p15:Math.max(0,need.p15-Math.max(0,free.p15)),flyers:Math.max(0,need.flyers-Math.max(0,free.flyers))}
 }
 export const canReserveOrder=(s:AppState,o:Order)=>Object.values(reservationShortage(s,o)).every(value=>value===0)
+export const createOrderWithReservation=(s:AppState,o:Order):Order=>({
+  ...o,
+  status: canReserveOrder(s,o) ? 'Нова' : 'Чека залиха',
+})
 export const canReplaceOrder=(s:AppState,original:Order,replacement:Order)=>{const base={...s,orders:s.orders.filter(order=>order.id!==original.id)},before=reservationShortage(base,original),after=reservationShortage(base,replacement);return (['p025','p15','flyers'] as const).every(product=>after[product]<=before[product])}
 export const waitingDemand=(s:AppState)=>s.orders.filter(order=>order.status==='Чека залиха').reduce((total,order)=>{const need=orderPieces(order);return {p025:total.p025+need.p025,p15:total.p15+need.p15,flyers:total.flyers+need.flyers}},{p025:0,p15:0,flyers:0})
 export const reconcileWaitingOrders=(s:AppState)=>s.orders.filter(order=>order.status==='Чека залиха').toSorted((a,b)=>a.date.localeCompare(b.date)||a.number.localeCompare(b.number)).reduce<AppState>((current,waiting)=>canReserveOrder(current,waiting)?{...current,orders:current.orders.map(order=>order.id===waiting.id?{...order,status:'Нова' as const}:order)}:current,s)

@@ -5,6 +5,7 @@ import {
   canReserveOrder,
   calculateWarehouseSnapshot,
   changeOrderStatus,
+  createOrderWithReservation,
   getItemQuantity,
   getProductPackageSize,
   hydrateState,
@@ -173,6 +174,55 @@ describe('warehouse engine', () => {
     const hydrated = hydrateState(state)
     expect(hydrated.orders.find(order => order.id === 'waiting')?.status).toBe('Нова')
     expect(available(hydrated).p025).toBe(0)
+  })
+
+  it('keeps all 26 BiB packages available when their historical packing movement was already deducted', () => {
+    const packedOrder = makeOrder({ id: 'packed-bib', number: 'PG-2026-0004', status: 'Спакувана', stockDeducted: true, qty15: 10 })
+    const firstOrder = makeOrder({ id: 'first-bib', number: 'PG-2026-0005', status: 'Нова', qty15: 13 })
+    const waitingOrder = makeOrder({ id: 'waiting-bib', number: 'PG-2026-0006', status: 'Чека залиха', qty15: 13 })
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 0, pieces: 0, total: 0, perPackage: 15 },
+        p15: { packages: 26, pieces: 0, total: 156, perPackage: 6 },
+        flyers: 0,
+      },
+      orders: [packedOrder, firstOrder, waitingOrder],
+      clients: [],
+      movements: [makeMovement({ product: 'p15', type: 'Излез', packages: 10, pieces: 0, orderNumber: packedOrder.number, note: 'Автоматско одземање при пакување' })],
+    }
+
+    const snapshot = calculateWarehouseSnapshot(state)
+    expect(snapshot.physical_stock.p15).toBe(156)
+    expect(snapshot.reserved_stock.p15).toBe(78)
+    expect(snapshot.available_stock.p15).toBe(78)
+    expect(canReserveOrder(state, waitingOrder)).toBe(true)
+
+    const hydrated = hydrateState(state)
+    expect(hydrated.orders.find(order => order.id === 'waiting-bib')?.status).toBe('Нова')
+    expect(available(hydrated).p15).toBe(0)
+  })
+
+  it('reserves the two exact Skopje orders against the latest warehouse state', () => {
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 213, pieces: 0, total: 3195, perPackage: 15 },
+        p15: { packages: 26, pieces: 0, total: 156, perPackage: 6 },
+        flyers: 0,
+      },
+      orders: [],
+      clients: [],
+      movements: [],
+    }
+    const first = makeOrder({ id: 'skopje-1', number: 'PG-2026-0101', client: 'Скопје 1', city: 'Скопје', qty025: 113, qty15: 26 })
+    const savedFirst = createOrderWithReservation(state, first)
+    const withFirst = { ...state, orders: [savedFirst] }
+    const second = makeOrder({ id: 'skopje-2', number: 'PG-2026-0102', client: 'Скопје 2', city: 'Скопје', qty025: 100 })
+    const savedSecond = createOrderWithReservation(withFirst, second)
+    const complete = { ...withFirst, orders: [savedSecond, ...withFirst.orders] }
+
+    expect(savedFirst.status).toBe('Нова')
+    expect(savedSecond.status).toBe('Нова')
+    expect(available(complete)).toEqual({ p025: 0, p15: 0, flyers: 0 })
   })
 
   it('does not double-count stock when an order is cancelled twice', () => {

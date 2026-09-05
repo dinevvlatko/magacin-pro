@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { ArchiveRestore, ArrowLeftRight, CheckCircle2, ChevronRight, CirclePlus, Cloud, CloudOff, Eye, FileText, LogIn, LogOut, Package, Pencil, Printer, QrCode, RotateCcw, Search, Send, ShieldCheck, Trash2, Truck, Warehouse as WarehouseIcon } from 'lucide-react'
 import type { AppState, Movement, MovementType, Order, OrderStatus, ProductKey } from './types'
 import { demoState, makeOrderNumber } from './lib/data'
-import { activeStatuses, allowedTransitions, allPacked, applyOrderStatusTransition, available, breakdown, canReserveOrder, deductOrderStock, hydrateState, normalize, orderPieces, productName, reconcileWaitingOrders, reservationShortage, reserved, returnOrderStock, updatePackedItem } from './lib/logic'
+import { activeStatuses, allowedTransitions, allPacked, applyOrderStatusTransition, available, breakdown, canReserveOrder, createOrderWithReservation, deductOrderStock, hydrateState, normalize, orderPieces, productName, reconcileWaitingOrders, reservationShortage, reserved, returnOrderStock, updatePackedItem } from './lib/logic'
 import { supabase, syncEnabled } from './lib/supabase'
 import { useSyncedState, type SyncStatus } from './lib/useSyncedState'
 import type { LocalStateBackup } from './lib/storage'
@@ -125,7 +125,7 @@ function App(){
   if(target){changeStatus(o,target);void recordAudit('order.qr_status_advanced','order',o.id,{number:o.number,from:o.status,to:target})}
  }
  const deleteOrder=(id:string)=>{const order=state.orders.find(item=>item.id===id);if(!order||!confirm('Да се избрише нарачката?'))return;setState(s=>({...s,orders:s.orders.filter(item=>item.id!==id)}));void recordAudit('order.deleted','order',id,{number:order.number,client:order.client})}
- const saveNewOrder=(o:Order)=>{const saved={...o,status:(canReserveOrder(state,o)?'Нова':'Чека залиха') as OrderStatus};setState(s=>({...s,orders:[saved,...s.orders],clients:s.clients.some(c=>c.name.toLowerCase()===saved.client.toLowerCase())?s.clients:[...s.clients,{id:crypto.randomUUID(),name:saved.client,city:saved.city,phone:'',contactPerson:'',address:''}]}));void recordAudit('order.created','order',saved.id,{number:saved.number,client:saved.client,city:saved.city,status:saved.status});setShowOrder(false)}
+ const saveNewOrder=(o:Order)=>{setState(current=>{const saved=createOrderWithReservation(current,o);return {...current,orders:[saved,...current.orders],clients:current.clients.some(c=>c.name.toLowerCase()===saved.client.toLowerCase())?current.clients:[...current.clients,{id:crypto.randomUUID(),name:saved.client,city:saved.city,phone:'',contactPerson:'',address:''}]}});void recordAudit('order.created','order',o.id,{number:o.number,client:o.client,city:o.city});setShowOrder(false)}
  const editOrder=(o:Order)=>{if(o.stockDeducted&&!isAdmin){alert('Само администратор може да менува нарачка откако залихата е одземена.');return}if(o.stockDeducted&&!confirm('Оваа нарачка е веќе спакувана. При зачувување, старата количина ќе се врати и исправената повторно ќе се одземе. Продолжи?'))return;setEditingOrderId(o.id)}
  const saveEditedOrder=(candidate:Order)=>{
   const original=state.orders.find(order=>order.id===candidate.id);if(!original)return
