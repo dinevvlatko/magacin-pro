@@ -87,25 +87,19 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
     }
   })
 
+  // warehouse is the current balance and is updated together with every
+  // movement. Movements are an audit trail, so replaying them here would
+  // subtract or add the same quantity a second time.
   state.movements.forEach(movement => {
-    const isBaselineArchive = movement.party === 'Почетна состојба' && movement.note === 'Почетна залиха'
-    if (isBaselineArchive) return
-
     const total = movement.product === 'p025' ? movement.packages * 15 + movement.pieces : movement.product === 'p15' ? movement.packages * 6 + movement.pieces : movement.pieces
     if (movement.type === 'Влез' || movement.type === 'Враќање') {
-      physical_stock[movement.product] += total
       received_stock[movement.product] += total
     }
     if (movement.type === 'Корекција') {
-      physical_stock[movement.product] += total
       corrected_stock[movement.product] += total
     }
     if (movement.type === 'Оштетување') {
-      physical_stock[movement.product] -= total
       damaged_stock[movement.product] += total
-    }
-    if (movement.type === 'Излез') {
-      physical_stock[movement.product] -= total
     }
   })
 
@@ -275,7 +269,7 @@ export const rebalanceReservations=(state:AppState):AppState=>{
  state.orders.filter(order=>reservingStatuses.has(order.status)&&!order.stockDeducted).toSorted((a,b)=>a.date.localeCompare(b.date)||a.number.localeCompare(b.number)).forEach(order=>{const need=orderPieces(order),fits=need.p025<=capacity.p025&&need.p15<=capacity.p15&&need.flyers<=capacity.flyers;if(fits){capacity.p025-=need.p025;capacity.p15-=need.p15;capacity.flyers-=need.flyers}else decisions.set(order.id,'Чека залиха')})
  return decisions.size?{...state,orders:state.orders.map(order=>decisions.has(order.id)?{...order,status:'Чека залиха'}:order)}:state
 }
-export const hydrateState=(state:AppState):AppState=>rebalanceReservations(ensureDocumentArchive({...state,stockThresholds:state.stockThresholds||{p025:300,p15:60,flyers:500},orders:state.orders.map(o=>{const {scannedPackages:_removed,...clean}=o as Order&{scannedPackages?:unknown};void _removed;const hydrated={...clean,qty025Pieces:clean.qty025Pieces||0,qty15Pieces:clean.qty15Pieces||0,free025Pieces:clean.free025Pieces||0,free15:clean.free15||0,free15Pieces:clean.free15Pieces||0,packed:{...clean.packed,free15:clean.packed.free15||false}};const packed=reservingStatuses.has(hydrated.status)&&allPacked(hydrated)?{...hydrated,status:'Спакувана' as const}:hydrated;const legacyDeducted=deductStatuses.has(packed.status)&&!packed.stockDeducted?{...packed,stockDeducted:true}:packed;return legacyDeducted.status==='Чека залиха'&&legacyDeducted.stockDeducted?{...legacyDeducted,stockDeducted:false}:legacyDeducted})}))
+export const hydrateState=(state:AppState)=>reconcileWaitingOrders(rebalanceReservations(ensureDocumentArchive({...state,stockThresholds:state.stockThresholds||{p025:300,p15:60,flyers:500},orders:state.orders.map(o=>{const {scannedPackages:_removed,...clean}=o as Order&{scannedPackages?:unknown};void _removed;const hydrated={...clean,qty025Pieces:clean.qty025Pieces||0,qty15Pieces:clean.qty15Pieces||0,free025Pieces:clean.free025Pieces||0,free15:clean.free15||0,free15Pieces:clean.free15Pieces||0,packed:{...clean.packed,free15:clean.packed.free15||false}};const packed=reservingStatuses.has(hydrated.status)&&allPacked(hydrated)?{...hydrated,status:'Спакувана' as const}:hydrated;const legacyDeducted=deductStatuses.has(packed.status)&&!packed.stockDeducted?{...packed,stockDeducted:true}:packed;return legacyDeducted.status==='Чека залиха'&&legacyDeducted.stockDeducted?{...legacyDeducted,stockDeducted:false}:legacyDeducted})})))
 
 export const reserved=(s:AppState)=>{
   const snapshot=calculateWarehouseSnapshot(s)

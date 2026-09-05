@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { AppState, Order, Movement } from '../types'
 import {
+  available,
+  canReserveOrder,
   calculateWarehouseSnapshot,
   changeOrderStatus,
   getItemQuantity,
   getProductPackageSize,
+  hydrateState,
   normalizeWarehouseTotals,
 } from './logic'
 
@@ -129,7 +132,7 @@ describe('warehouse engine', () => {
     expect(next.warehouse.p025.total).toBe(150)
   })
 
-  it('applies receipt delta atomically and increases warehouse totals', () => {
+  it('keeps the stored warehouse total as the physical stock and uses receipts only as an audit trail', () => {
     const state: AppState = {
       warehouse: {
         p025: { packages: 10, pieces: 0, total: 150, perPackage: 15 },
@@ -142,8 +145,34 @@ describe('warehouse engine', () => {
     }
 
     const snapshot = calculateWarehouseSnapshot(state)
-    expect(snapshot.physical_stock.p025).toBe(165)
+    expect(snapshot.physical_stock.p025).toBe(150)
     expect(snapshot.received_stock.p025).toBe(15)
+  })
+
+  it('does not subtract an already recorded packing movement twice when reserving exact stock', () => {
+    const packedOrder = makeOrder({ id: 'packed', number: 'PG-2026-0001', status: 'Спакувана', stockDeducted: true, qty025: 30 })
+    const firstOrder = makeOrder({ id: 'first', number: 'PG-2026-0002', status: 'Нова', qty025: 100 })
+    const waitingOrder = makeOrder({ id: 'waiting', number: 'PG-2026-0003', status: 'Чека залиха', qty025: 113 })
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 213, pieces: 0, total: 3195, perPackage: 15 },
+        p15: { packages: 10, pieces: 0, total: 60, perPackage: 6 },
+        flyers: 50,
+      },
+      orders: [packedOrder, firstOrder, waitingOrder],
+      clients: [],
+      movements: [makeMovement({ product: 'p025', type: 'Излез', packages: 30, pieces: 0, orderNumber: packedOrder.number, note: 'Автоматско одземање при пакување' })],
+    }
+
+    const snapshot = calculateWarehouseSnapshot(state)
+    expect(snapshot.physical_stock.p025).toBe(3195)
+    expect(snapshot.reserved_stock.p025).toBe(1500)
+    expect(snapshot.available_stock.p025).toBe(1695)
+    expect(canReserveOrder(state, waitingOrder)).toBe(true)
+
+    const hydrated = hydrateState(state)
+    expect(hydrated.orders.find(order => order.id === 'waiting')?.status).toBe('Нова')
+    expect(available(hydrated).p025).toBe(0)
   })
 
   it('does not double-count stock when an order is cancelled twice', () => {
