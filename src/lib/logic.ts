@@ -154,7 +154,10 @@ export const deductOrderStock=(s:AppState,o:Order,status=o.status):AppState|null
     return { ...s, orders: s.orders.map(x => x.id === o.id ? { ...x, status } : x) }
   }
   const need = orderPieces(o)
-  const snapshot = calculateWarehouseSnapshot(s)
+  // The order being packed is already a soft reservation. Check the stock
+  // against every *other* reservation, otherwise an exactly fully reserved
+  // warehouse would report zero available and could never be packed.
+  const snapshot = calculateWarehouseSnapshot({ ...s, orders: s.orders.filter(order => order.id !== o.id) })
   if (snapshot.available_stock.p025 < need.p025 || snapshot.available_stock.p15 < need.p15 || snapshot.available_stock.flyers < need.flyers) {
     return null
   }

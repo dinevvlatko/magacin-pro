@@ -225,6 +225,32 @@ describe('warehouse engine', () => {
     expect(available(complete)).toEqual({ p025: 0, p15: 0, flyers: 0 })
   })
 
+  it('packs the two exact Skopje orders and leaves the warehouse empty', () => {
+    const first = makeOrder({ id: 'skopje-pack-1', number: 'PG-2026-0101', client: 'Скопје 1', city: 'Скопје', qty025: 113, qty15: 26, packed: { regular025: true, bib15: true, free025: true, free15: true, flyers: true } })
+    const second = makeOrder({ id: 'skopje-pack-2', number: 'PG-2026-0102', client: 'Скопје 2', city: 'Скопје', qty025: 100, packed: { regular025: true, bib15: true, free025: true, free15: true, flyers: true } })
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 213, pieces: 0, total: 3195, perPackage: 15 },
+        p15: { packages: 26, pieces: 0, total: 156, perPackage: 6 },
+        flyers: 0,
+      },
+      orders: [first, second],
+      clients: [],
+      movements: [],
+    }
+
+    const firstPacked = changeOrderStatus(state, first, 'Спакувана')
+    expect(firstPacked?.orders.find(order => order.id === first.id)?.status).toBe('Спакувана')
+    expect(firstPacked?.warehouse.p025.total).toBe(1500)
+    expect(firstPacked?.warehouse.p15.total).toBe(0)
+
+    const secondPacked = changeOrderStatus(firstPacked!, firstPacked!.orders.find(order => order.id === second.id)!, 'Спакувана')
+    expect(secondPacked?.orders.every(order => order.status === 'Спакувана')).toBe(true)
+    expect(secondPacked?.warehouse.p025.total).toBe(0)
+    expect(secondPacked?.warehouse.p15.total).toBe(0)
+    expect(available(secondPacked!)).toEqual({ p025: 0, p15: 0, flyers: 0 })
+  })
+
   it('does not double-count stock when an order is cancelled twice', () => {
     const state: AppState = {
       warehouse: {
