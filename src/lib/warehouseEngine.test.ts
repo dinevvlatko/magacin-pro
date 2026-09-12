@@ -337,6 +337,8 @@ describe('warehouse engine', () => {
       movements: [
         makeMovement({ id: 'latest-receipt', product: 'p025', type: 'Влез', packages: 85, orderNumber: 'PR-0002' }),
         makeMovement({ id: 'earlier-valid-repair', product: 'p025', type: 'Излез', packages: 100, orderNumber: 'PG-2026-0102', note: 'Корекција: повторно одземање по погрешно враќање при промена на статус' }),
+        makeMovement({ id: 'old-packing', product: 'p025', type: 'Излез', packages: 50, orderNumber: oldOrder.number, note: 'Автоматско одземање при пакување' }),
+        makeMovement({ id: 'old-incorrect-return', product: 'p025', type: 'Враќање', packages: 50, orderNumber: oldOrder.number, note: 'Автоматско враќање при откажување' }),
         makeMovement({ id: 'deferred-repair', product: 'p025', type: 'Излез', packages: 50, orderNumber: oldOrder.number, note: 'Корекција: повторно одземање по погрешно враќање при промена на статус' }),
       ],
     }
@@ -345,11 +347,10 @@ describe('warehouse engine', () => {
     const repairedAgain = hydrateState(repaired)
 
     expect(repaired.warehouse.p025).toMatchObject({ total: 1275, packages: 85, pieces: 0 })
-    expect(repaired.movements.at(-1)).toMatchObject({
-      id: 'deferred-repair-reversal-deferred-repair',
-      type: 'Враќање',
-      packages: 50,
-    })
+    expect(repaired.movements.filter(movement => movement.orderNumber === oldOrder.number)).toEqual([
+      expect.objectContaining({ id: 'old-packing', type: 'Излез', packages: 50 }),
+    ])
+    expect(repaired.movements.some(movement => movement.id === 'deferred-repair-reversal-deferred-repair')).toBe(false)
     expect(repairedAgain.warehouse).toEqual(repaired.warehouse)
     expect(repairedAgain.movements).toHaveLength(repaired.movements.length)
   })

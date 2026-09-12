@@ -330,6 +330,21 @@ export const reverseDeferredReceiptRepair=(state:AppState):AppState=>{
  return {...state,warehouse,movements:[...state.movements,reversal]}
 }
 
+// Remove the bookkeeping noise left by the repaired status bug. Each repair
+// was paired with an erroneous automatic return, so removing both audit rows
+// leaves the real packing exit and the authoritative physical balance intact.
+export const cleanStatusRepairAudit=(state:AppState):AppState=>{
+ const completedOrders=new Set(state.orders.filter(order=>deductStatuses.has(order.status)).map(order=>order.number))
+ const repairedOrders=new Set(state.movements.filter(movement=>completedOrders.has(movement.orderNumber)&&movement.note===statusReturnRepairNote).map(movement=>movement.orderNumber))
+ if(repairedOrders.size===0)return state
+ const movements=state.movements.filter(movement=>!repairedOrders.has(movement.orderNumber)||(
+  movement.note!==statusReturnRepairNote&&
+  movement.note!==deferredRepairReversalNote&&
+  movement.note!==automaticReturnNote
+ ))
+ return movements.length===state.movements.length?state:{...state,movements}
+}
+
 export const rebalanceReservations=(state:AppState):AppState=>{
  const capacity={p025:state.warehouse.p025.total,p15:state.warehouse.p15.total,flyers:state.warehouse.flyers}
  const decisions=new Map<string,OrderStatus>()
@@ -339,7 +354,8 @@ export const rebalanceReservations=(state:AppState):AppState=>{
 export const hydrateState=(state:AppState)=>{
  const normalized={...state,stockThresholds:state.stockThresholds||{p025:300,p15:60,flyers:500},orders:state.orders.map(o=>{const {scannedPackages:_removed,...clean}=o as Order&{scannedPackages?:unknown};void _removed;const hydrated={...clean,qty025Pieces:clean.qty025Pieces||0,qty15Pieces:clean.qty15Pieces||0,free025Pieces:clean.free025Pieces||0,free15:clean.free15||0,free15Pieces:clean.free15Pieces||0,packed:{...clean.packed,free15:clean.packed.free15||false}};const packed=reservingStatuses.has(hydrated.status)&&allPacked(hydrated)?{...hydrated,status:'Спакувана' as const}:hydrated;return packed.status==='Чека залиха'&&packed.stockDeducted?{...packed,stockDeducted:false}:packed})}
  const repaired=reverseDeferredReceiptRepair(ensureDocumentArchive(normalized))
- return reconcileWaitingOrders(rebalanceReservations(normalizeWarehouseTotals(repaired)))
+ const cleaned=cleanStatusRepairAudit(repaired)
+ return reconcileWaitingOrders(rebalanceReservations(normalizeWarehouseTotals(cleaned)))
 }
 
 export const reserved=(s:AppState)=>{
