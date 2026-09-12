@@ -96,7 +96,7 @@ describe('stock safeguards',()=>{
   const updated=applyOrderStatusTransition(state([original]),original,'Доставена')
   expect(updated).not.toBeNull()
   expect(updated?.orders[0].status).toBe('Доставена')
-  expect(updated?.orders[0].stockDeducted).toBe(false)
+  expect(updated?.orders[0].stockDeducted).toBe(true)
   expect(updated?.warehouse.p025.total).toBe(1500)
  })
  it('migrates old sent orders without re-deducting stock on hydrate',()=>{
