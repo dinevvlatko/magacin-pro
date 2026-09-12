@@ -301,37 +301,55 @@ describe('warehouse engine', () => {
     expect(delivered.movements).toHaveLength(0)
   })
 
-  it('repairs the two delivered Skopje orders that were wrongly returned by the old status transition', () => {
-    const first = makeOrder({ id: 'delivered-1', number: 'PG-2026-0101', client: 'Скопје 1', status: 'Доставена', qty025: 113, qty15: 26, stockDeducted: false })
-    const second = makeOrder({ id: 'delivered-2', number: 'PG-2026-0102', client: 'Скопје 2', status: 'Доставена', qty025: 100, stockDeducted: true })
-    const movements = [
-      makeMovement({ id: 'first-p025-out', product: 'p025', type: 'Излез', packages: 113, orderNumber: first.number, note: 'Автоматско одземање при пакување' }),
-      makeMovement({ id: 'first-p15-out', product: 'p15', type: 'Излез', packages: 26, orderNumber: first.number, note: 'Автоматско одземање при пакување' }),
-      makeMovement({ id: 'first-p025-return', product: 'p025', type: 'Враќање', packages: 113, orderNumber: first.number, note: 'Автоматско враќање при откажување' }),
-      makeMovement({ id: 'first-p15-return', product: 'p15', type: 'Враќање', packages: 26, orderNumber: first.number, note: 'Автоматско враќање при откажување' }),
-      makeMovement({ id: 'second-p025-out', product: 'p025', type: 'Излез', packages: 100, orderNumber: second.number, note: 'Автоматско одземање при пакување' }),
-      makeMovement({ id: 'second-p025-return', product: 'p025', type: 'Враќање', packages: 100, orderNumber: second.number, note: 'Автоматско враќање при откажување' }),
-    ]
+  it('does not consume a new receipt to retry an older status repair', () => {
+    const oldOrder = makeOrder({ id: 'old-delivered', number: 'PG-2026-0004', status: 'Доставена', qty025: 50, stockDeducted: true })
     const state: AppState = {
       warehouse: {
-        p025: { packages: 213, pieces: 0, total: 3195, perPackage: 15 },
-        p15: { packages: 26, pieces: 0, total: 156, perPackage: 6 },
+        p025: { packages: 85, pieces: 0, total: 1275, perPackage: 15 },
+        p15: { packages: 0, pieces: 0, total: 0, perPackage: 6 },
         flyers: 0,
       },
-      orders: [first, second],
+      orders: [oldOrder],
       clients: [],
-      movements,
+      movements: [
+        makeMovement({ id: 'latest-receipt', product: 'p025', type: 'Влез', packages: 85, orderNumber: 'PR-0002' }),
+        makeMovement({ id: 'old-out', product: 'p025', type: 'Излез', packages: 50, orderNumber: oldOrder.number, note: 'Автоматско одземање при пакување' }),
+        makeMovement({ id: 'old-return', product: 'p025', type: 'Враќање', packages: 50, orderNumber: oldOrder.number, note: 'Автоматско враќање при откажување' }),
+      ],
+    }
+
+    const hydrated = hydrateState(state)
+
+    expect(hydrated.warehouse.p025).toMatchObject({ total: 1275, packages: 85, pieces: 0 })
+    expect(hydrated.movements.some(movement => movement.note.startsWith('Корекција: повторно одземање'))).toBe(false)
+  })
+
+  it('returns the deferred 50-package correction that reduced an 85-package receipt to 35', () => {
+    const oldOrder = makeOrder({ id: 'old-delivered', number: 'PG-2026-0004', status: 'Доставена', qty025: 50, stockDeducted: true })
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 35, pieces: 0, total: 525, perPackage: 15 },
+        p15: { packages: 0, pieces: 0, total: 0, perPackage: 6 },
+        flyers: 0,
+      },
+      orders: [oldOrder],
+      clients: [],
+      movements: [
+        makeMovement({ id: 'latest-receipt', product: 'p025', type: 'Влез', packages: 85, orderNumber: 'PR-0002' }),
+        makeMovement({ id: 'earlier-valid-repair', product: 'p025', type: 'Излез', packages: 100, orderNumber: 'PG-2026-0102', note: 'Корекција: повторно одземање по погрешно враќање при промена на статус' }),
+        makeMovement({ id: 'deferred-repair', product: 'p025', type: 'Излез', packages: 50, orderNumber: oldOrder.number, note: 'Корекција: повторно одземање по погрешно враќање при промена на статус' }),
+      ],
     }
 
     const repaired = hydrateState(state)
     const repairedAgain = hydrateState(repaired)
-    const repairMovements = repaired.movements.filter(movement => movement.note.startsWith('Корекција: повторно одземање'))
 
-    expect(repaired.warehouse.p025.total).toBe(0)
-    expect(repaired.warehouse.p15.total).toBe(0)
-    expect(repaired.orders.every(order => order.stockDeducted)).toBe(true)
-    expect(repairMovements).toHaveLength(3)
-    expect(calculateWarehouseSnapshot(repaired).reconciled_outbound_stock).toEqual({ p025: 3195, p15: 156, flyers: 0 })
+    expect(repaired.warehouse.p025).toMatchObject({ total: 1275, packages: 85, pieces: 0 })
+    expect(repaired.movements.at(-1)).toMatchObject({
+      id: 'deferred-repair-reversal-deferred-repair',
+      type: 'Враќање',
+      packages: 50,
+    })
     expect(repairedAgain.warehouse).toEqual(repaired.warehouse)
     expect(repairedAgain.movements).toHaveLength(repaired.movements.length)
   })

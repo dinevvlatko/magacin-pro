@@ -66,6 +66,7 @@ const productKeys = ['p025', 'p15', 'flyers'] as const
 const automaticPackingNote = 'Автоматско одземање при пакување'
 const automaticReturnNote = 'Автоматско враќање при откажување'
 const statusReturnRepairNote = 'Корекција: повторно одземање по погрешно враќање при промена на статус'
+const deferredRepairReversalNote = 'Корекција: вратена задоцнета корекција што погрешно се одзела од нова приемница'
 
 const movementTotal=(movement:Movement)=>movement.product==='p025'?movement.packages*15+movement.pieces:movement.product==='p15'?movement.packages*6+movement.pieces:movement.pieces
 
@@ -299,52 +300,34 @@ export const ensureDocumentArchive=(state:AppState):AppState=>{
  return {...state,movements:[...baseline,...state.movements.filter(m=>m.orderNumber!=='PR-0001'&&!/^PRI-\d{4}-\d+$/.test(m.orderNumber))]}
 }
 
-// Versions before this repair returned already deducted stock when an order
-// moved from "Спакувана" to another fulfilment status. The audit trail lets us
-// identify that exact case safely: a completed order has an automatic packing
-// exit and an automatic cancellation return whose net effect is below the
-// order quantity. Reconcile only that missing net quantity and keep an audit
-// movement, so hydration is deterministic and idempotent.
-export const repairIncorrectStatusReturns=(state:AppState):AppState=>{
- let current=state
- for(const order of state.orders){
-  if(!deductStatuses.has(order.status))continue
-  const outbound=zeroStock(),returned=zeroStock()
-  current.movements.forEach(movement=>{
-   if(movement.orderNumber!==order.number)return
-   const total=movementTotal(movement)
-   if(movement.type==='Излез'&&(movement.note===automaticPackingNote||movement.note===statusReturnRepairNote))outbound[movement.product]+=total
-   if(movement.type==='Враќање'&&movement.note===automaticReturnNote)returned[movement.product]+=total
-  })
-  if(!productKeys.some(product=>returned[product]>0))continue
-  const expected=orderPieces(order)
-  const missing={
-   p025:Math.max(0,expected.p025-(outbound.p025-returned.p025)),
-   p15:Math.max(0,expected.p15-(outbound.p15-returned.p15)),
-   flyers:Math.max(0,expected.flyers-(outbound.flyers-returned.flyers)),
-  }
-  if(!productKeys.some(product=>missing[product]>0))continue
-  if(current.warehouse.p025.total<missing.p025||current.warehouse.p15.total<missing.p15||current.warehouse.flyers<missing.flyers)continue
-  const date=new Date().toISOString().slice(0,10)
-  const repairs:Movement[]=productKeys.flatMap(product=>{
-   const quantity=missing[product]
-   if(quantity===0)return []
-   const packageSize=getProductPackageSize(product)
-   const normalized=normalize(quantity,packageSize)
-   return [{id:`status-stock-repair-${order.id}-${product}`,date,product,type:'Излез',packages:product==='flyers'?0:normalized.packages,pieces:product==='flyers'?quantity:normalized.pieces,party:order.client,orderNumber:order.number,note:statusReturnRepairNote}]
-  })
-  current={
-   ...current,
-   warehouse:{
-    p025:normalize(current.warehouse.p025.total-missing.p025,15),
-    p15:normalize(current.warehouse.p15.total-missing.p15,6),
-    flyers:current.warehouse.flyers-missing.flyers,
-   },
-   orders:current.orders.map(item=>item.id===order.id?{...item,stockDeducted:true}:item),
-   movements:[...current.movements,...repairs],
-  }
- }
- return current
+// A previous release retried an old stock repair whenever new goods arrived.
+// In the reported case the warehouse was empty, an 85-package receipt arrived,
+// and a trailing 50-package repair consumed it, leaving 35. Reverse only that
+// exact, auditable shape: the final movement is the repair and its quantity is
+// precisely the gap between the latest receipt and the physical balance.
+export const reverseDeferredReceiptRepair=(state:AppState):AppState=>{
+ const repair=state.movements.at(-1)
+ if(!repair||repair.type!=='Излез'||repair.note!==statusReturnRepairNote)return state
+ const reversalId=`deferred-repair-reversal-${repair.id}`
+ if(state.movements.some(movement=>movement.id===reversalId))return state
+ const latestReceiptNumber=state.movements
+  .filter(movement=>movement.type==='Влез'&&/^PR-\d{4}$/.test(movement.orderNumber)&&movement.orderNumber!=='PR-0001')
+  .map(movement=>movement.orderNumber)
+  .toSorted((left,right)=>Number(right.slice(3))-Number(left.slice(3)))[0]
+ if(!latestReceiptNumber)return state
+ const received=state.movements
+  .filter(movement=>movement.type==='Влез'&&movement.orderNumber===latestReceiptNumber&&movement.product===repair.product)
+  .reduce((total,movement)=>total+movementTotal(movement),0)
+ const physical=repair.product==='p025'?state.warehouse.p025.total:repair.product==='p15'?state.warehouse.p15.total:state.warehouse.flyers
+ const correction=movementTotal(repair)
+ if(received<=physical||received-physical!==correction)return state
+ const warehouse=repair.product==='p025'
+  ?{...state.warehouse,p025:normalize(state.warehouse.p025.total+correction,15)}
+  :repair.product==='p15'
+   ?{...state.warehouse,p15:normalize(state.warehouse.p15.total+correction,6)}
+   :{...state.warehouse,flyers:state.warehouse.flyers+correction}
+ const reversal:Movement={...repair,id:reversalId,type:'Враќање',date:new Date().toISOString().slice(0,10),note:deferredRepairReversalNote}
+ return {...state,warehouse,movements:[...state.movements,reversal]}
 }
 
 export const rebalanceReservations=(state:AppState):AppState=>{
@@ -355,7 +338,7 @@ export const rebalanceReservations=(state:AppState):AppState=>{
 }
 export const hydrateState=(state:AppState)=>{
  const normalized={...state,stockThresholds:state.stockThresholds||{p025:300,p15:60,flyers:500},orders:state.orders.map(o=>{const {scannedPackages:_removed,...clean}=o as Order&{scannedPackages?:unknown};void _removed;const hydrated={...clean,qty025Pieces:clean.qty025Pieces||0,qty15Pieces:clean.qty15Pieces||0,free025Pieces:clean.free025Pieces||0,free15:clean.free15||0,free15Pieces:clean.free15Pieces||0,packed:{...clean.packed,free15:clean.packed.free15||false}};const packed=reservingStatuses.has(hydrated.status)&&allPacked(hydrated)?{...hydrated,status:'Спакувана' as const}:hydrated;return packed.status==='Чека залиха'&&packed.stockDeducted?{...packed,stockDeducted:false}:packed})}
- const repaired=repairIncorrectStatusReturns(ensureDocumentArchive(normalized))
+ const repaired=reverseDeferredReceiptRepair(ensureDocumentArchive(normalized))
  return reconcileWaitingOrders(rebalanceReservations(normalizeWarehouseTotals(repaired)))
 }
 
