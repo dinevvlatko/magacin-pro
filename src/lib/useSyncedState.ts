@@ -16,6 +16,7 @@ type SharedWarehouseRow={id:'main';state:AppState;updated_at:string;updated_by:s
 type PendingSave={state:AppState;baseVersion:string}
 
 const serialized=(state:AppState)=>JSON.stringify(state)
+const persistedBase=(stored:AppState,hydrated:AppState)=>serialized(stored)===serialized(hydrated)?hydrated:stored
 
 export function useSyncedState(){
  const initial=loadState()
@@ -41,24 +42,25 @@ export function useSyncedState(){
 
   const acceptRemote=(row:SharedWarehouseRow)=>{
    const remote=hydrateState(row.state)
+   const remoteBase=persistedBase(row.state,remote)
    if(row.updated_at===baseVersionRef.current)return
    if(pendingRef.current)return
    const current=stateRef.current,base=baseStateRef.current
    if(serialized(current)===serialized(base)){
-    baseStateRef.current=remote;baseVersionRef.current=row.updated_at;stateRef.current=remote;setState(remote);setSyncStatus('synced');return
+    baseStateRef.current=remoteBase;baseVersionRef.current=row.updated_at;stateRef.current=remote;setState(remote);setSyncStatus(serialized(remoteBase)===serialized(remote)?'synced':'syncing');return
    }
    try{
     const merged=mergeConcurrentStates(base,current,remote)
-    baseStateRef.current=remote;baseVersionRef.current=row.updated_at;stateRef.current=merged;setState(merged);setSyncStatus('syncing')
+    baseStateRef.current=remoteBase;baseVersionRef.current=row.updated_at;stateRef.current=merged;setState(merged);setSyncStatus('syncing')
    }catch(error){
-    baseStateRef.current=remote;baseVersionRef.current=row.updated_at;stateRef.current=remote;setState(remote);setSyncStatus('error');setSyncError(error instanceof Error?error.message:'Истовремената промена не може безбедно да се спои.')
+    baseStateRef.current=remoteBase;baseVersionRef.current=row.updated_at;stateRef.current=remote;setState(remote);setSyncStatus('error');setSyncError(error instanceof Error?error.message:'Истовремената промена не може безбедно да се спои.')
    }
   }
   const adoptInitialRemote=(row:SharedWarehouseRow)=>{
    const remote=hydrateState(row.state)
    const backup=preservePreSyncBackup(hydrateState(stateRef.current),remote)
    if(backup)setLocalBackup(backup)
-   baseStateRef.current=remote;baseVersionRef.current=row.updated_at;stateRef.current=remote;setState(remote);saveState(remote);markSharedSyncReady()
+   baseStateRef.current=persistedBase(row.state,remote);baseVersionRef.current=row.updated_at;stateRef.current=remote;setState(remote);saveState(remote);markSharedSyncReady()
   }
 
   const denyAccess=()=>{setProfile(null);setAccess('blocked');setSyncReady(false);setSyncStatus('error');setSyncError(blockedAccessMessage);pendingRef.current=null;if(saveTimerRef.current)window.clearTimeout(saveTimerRef.current);void supabase.auth.signOut()}
@@ -108,6 +110,12 @@ export function useSyncedState(){
    pendingRef.current=null
    if(fetchError||!latestRow){setSyncStatus('error');setSyncError(fetchError?.message||'Не може да се провери истовремената промена.');return}
    const remote=hydrateState(latestRow.state)
+   if(serialized(candidate)===serialized(remote)){
+    baseStateRef.current=remote;baseVersionRef.current=latestRow.updated_at
+    const current=stateRef.current
+    if(serialized(current)===serialized(candidate)){setSyncStatus('synced');setSyncError('');return}
+    await persist(current,attempt+1);return
+   }
    try{
     let merged=mergeConcurrentStates(base,candidate,remote)
     const current=stateRef.current

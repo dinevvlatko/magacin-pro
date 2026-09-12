@@ -7,6 +7,10 @@ export type WarehouseSnapshot = {
   available_stock: WarehouseStockByProduct
   deducted_stock: WarehouseStockByProduct
   received_stock: WarehouseStockByProduct
+  returned_stock: WarehouseStockByProduct
+  automatic_packed_stock: WarehouseStockByProduct
+  manual_outbound_stock: WarehouseStockByProduct
+  reconciled_outbound_stock: WarehouseStockByProduct
   damaged_stock: WarehouseStockByProduct
   corrected_stock: WarehouseStockByProduct
 }
@@ -59,6 +63,11 @@ export const allowedTransitions:Record<OrderStatus,OrderStatus[]>={
 
 const zeroStock = (): WarehouseStockByProduct => ({ p025: 0, p15: 0, flyers: 0 })
 const productKeys = ['p025', 'p15', 'flyers'] as const
+const automaticPackingNote = 'Автоматско одземање при пакување'
+const automaticReturnNote = 'Автоматско враќање при откажување'
+const statusReturnRepairNote = 'Корекција: повторно одземање по погрешно враќање при промена на статус'
+
+const movementTotal=(movement:Movement)=>movement.product==='p025'?movement.packages*15+movement.pieces:movement.product==='p15'?movement.packages*6+movement.pieces:movement.pieces
 
 export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
   const physical_stock = {
@@ -70,6 +79,10 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
   const reserved_stock = zeroStock()
   const deducted_stock = zeroStock()
   const received_stock = zeroStock()
+  const returned_stock = zeroStock()
+  const automatic_packed_stock = zeroStock()
+  const manual_outbound_stock = zeroStock()
+  const reconciled_outbound_stock = zeroStock()
   const damaged_stock = zeroStock()
   const corrected_stock = zeroStock()
 
@@ -91,9 +104,17 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
   // movement. Movements are an audit trail, so replaying them here would
   // subtract or add the same quantity a second time.
   state.movements.forEach(movement => {
-    const total = movement.product === 'p025' ? movement.packages * 15 + movement.pieces : movement.product === 'p15' ? movement.packages * 6 + movement.pieces : movement.pieces
-    if (movement.type === 'Влез' || movement.type === 'Враќање') {
+    const total = movementTotal(movement)
+    if (movement.type === 'Влез') {
       received_stock[movement.product] += total
+    }
+    if (movement.type === 'Враќање') {
+      returned_stock[movement.product] += total
+    }
+    if (movement.type === 'Излез') {
+      if (movement.note === automaticPackingNote) automatic_packed_stock[movement.product] += total
+      else if (movement.note === statusReturnRepairNote) reconciled_outbound_stock[movement.product] += total
+      else manual_outbound_stock[movement.product] += total
     }
     if (movement.type === 'Корекција') {
       corrected_stock[movement.product] += total
@@ -108,6 +129,10 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
     reserved_stock[product] = Math.max(0, reserved_stock[product])
     deducted_stock[product] = Math.max(0, deducted_stock[product])
     received_stock[product] = Math.max(0, received_stock[product])
+    returned_stock[product] = Math.max(0, returned_stock[product])
+    automatic_packed_stock[product] = Math.max(0, automatic_packed_stock[product])
+    manual_outbound_stock[product] = Math.max(0, manual_outbound_stock[product])
+    reconciled_outbound_stock[product] = Math.max(0, reconciled_outbound_stock[product])
     damaged_stock[product] = Math.max(0, damaged_stock[product])
     corrected_stock[product] = Math.max(0, corrected_stock[product])
   })
@@ -124,6 +149,10 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
     available_stock,
     deducted_stock,
     received_stock,
+    returned_stock,
+    automatic_packed_stock,
+    manual_outbound_stock,
+    reconciled_outbound_stock,
     damaged_stock,
     corrected_stock,
   }
@@ -173,9 +202,9 @@ export const deductOrderStock=(s:AppState,o:Order,status=o.status):AppState|null
     orders: s.orders.map(x => x.id === o.id ? { ...x, status, stockDeducted: true } : x),
     movements: [
       ...s.movements,
-      { id: crypto.randomUUID(), date, product: 'p025', type: 'Излез', packages: o.qty025 + o.free025, pieces: (o.qty025Pieces ?? 0) + (o.free025Pieces ?? 0), party: o.client, orderNumber: o.number, note: 'Автоматско одземање при пакување' },
-      { id: crypto.randomUUID(), date, product: 'p15', type: 'Излез', packages: o.qty15 + (o.free15 ?? 0), pieces: (o.qty15Pieces ?? 0) + (o.free15Pieces ?? 0), party: o.client, orderNumber: o.number, note: 'Автоматско одземање при пакување' },
-      { id: crypto.randomUUID(), date, product: 'flyers', type: 'Излез', packages: 0, pieces: o.flyers, party: o.client, orderNumber: o.number, note: 'Автоматско одземање при пакување' },
+      { id: crypto.randomUUID(), date, product: 'p025', type: 'Излез', packages: o.qty025 + o.free025, pieces: (o.qty025Pieces ?? 0) + (o.free025Pieces ?? 0), party: o.client, orderNumber: o.number, note: automaticPackingNote },
+      { id: crypto.randomUUID(), date, product: 'p15', type: 'Излез', packages: o.qty15 + (o.free15 ?? 0), pieces: (o.qty15Pieces ?? 0) + (o.free15Pieces ?? 0), party: o.client, orderNumber: o.number, note: automaticPackingNote },
+      { id: crypto.randomUUID(), date, product: 'flyers', type: 'Излез', packages: 0, pieces: o.flyers, party: o.client, orderNumber: o.number, note: automaticPackingNote },
     ],
   }
 }
@@ -199,9 +228,9 @@ export const returnOrderStock=(s:AppState,o:Order):AppState=>{
     orders: s.orders.map(x => x.id === o.id ? { ...x, status: 'Откажана', stockDeducted: false } : x),
     movements: [
       ...s.movements,
-      { id: crypto.randomUUID(), date, product: 'p025', type: 'Враќање', packages: current.qty025 + current.free025, pieces: (current.qty025Pieces ?? 0) + (current.free025Pieces ?? 0), party: current.client, orderNumber: current.number, note: 'Автоматско враќање при откажување' },
-      { id: crypto.randomUUID(), date, product: 'p15', type: 'Враќање', packages: current.qty15 + (current.free15 ?? 0), pieces: (current.qty15Pieces ?? 0) + (current.free15Pieces ?? 0), party: current.client, orderNumber: current.number, note: 'Автоматско враќање при откажување' },
-      { id: crypto.randomUUID(), date, product: 'flyers', type: 'Враќање', packages: 0, pieces: current.flyers, party: current.client, orderNumber: current.number, note: 'Автоматско враќање при откажување' },
+      { id: crypto.randomUUID(), date, product: 'p025', type: 'Враќање', packages: current.qty025 + current.free025, pieces: (current.qty025Pieces ?? 0) + (current.free025Pieces ?? 0), party: current.client, orderNumber: current.number, note: automaticReturnNote },
+      { id: crypto.randomUUID(), date, product: 'p15', type: 'Враќање', packages: current.qty15 + (current.free15 ?? 0), pieces: (current.qty15Pieces ?? 0) + (current.free15Pieces ?? 0), party: current.client, orderNumber: current.number, note: automaticReturnNote },
+      { id: crypto.randomUUID(), date, product: 'flyers', type: 'Враќање', packages: 0, pieces: current.flyers, party: current.client, orderNumber: current.number, note: automaticReturnNote },
     ],
   }
 }
@@ -215,8 +244,11 @@ export const changeOrderStatus=(s:AppState,o:Order,next:OrderStatus):AppState|nu
     return { ...s, orders: s.orders.map(x => x.id === o.id ? { ...x, status: 'Откажана' } : x) }
   }
 
-  if (current.status === 'Испратена' && next === 'Доставена') {
-    return { ...s, orders: s.orders.map(x => x.id === o.id ? { ...x, status: next, stockDeducted: current.stockDeducted } : x) }
+  // Once stock is deducted at packing, every following fulfilment status is
+  // status-only. Returning it here used to put packed goods back in stock on
+  // the "Спакувана" -> "Испратена" transition.
+  if (deductStatuses.has(current.status) && deductStatuses.has(next)) {
+    return { ...s, orders: s.orders.map(x => x.id === o.id ? { ...x, status: next, stockDeducted: true } : x) }
   }
 
   if (next === 'Нова' || next === 'Во подготовка') {
@@ -266,13 +298,66 @@ export const ensureDocumentArchive=(state:AppState):AppState=>{
  if(existing.length>0&&!legacy)return state
  return {...state,movements:[...baseline,...state.movements.filter(m=>m.orderNumber!=='PR-0001'&&!/^PRI-\d{4}-\d+$/.test(m.orderNumber))]}
 }
+
+// Versions before this repair returned already deducted stock when an order
+// moved from "Спакувана" to another fulfilment status. The audit trail lets us
+// identify that exact case safely: a completed order has an automatic packing
+// exit and an automatic cancellation return whose net effect is below the
+// order quantity. Reconcile only that missing net quantity and keep an audit
+// movement, so hydration is deterministic and idempotent.
+export const repairIncorrectStatusReturns=(state:AppState):AppState=>{
+ let current=state
+ for(const order of state.orders){
+  if(!deductStatuses.has(order.status))continue
+  const outbound=zeroStock(),returned=zeroStock()
+  current.movements.forEach(movement=>{
+   if(movement.orderNumber!==order.number)return
+   const total=movementTotal(movement)
+   if(movement.type==='Излез'&&(movement.note===automaticPackingNote||movement.note===statusReturnRepairNote))outbound[movement.product]+=total
+   if(movement.type==='Враќање'&&movement.note===automaticReturnNote)returned[movement.product]+=total
+  })
+  if(!productKeys.some(product=>returned[product]>0))continue
+  const expected=orderPieces(order)
+  const missing={
+   p025:Math.max(0,expected.p025-(outbound.p025-returned.p025)),
+   p15:Math.max(0,expected.p15-(outbound.p15-returned.p15)),
+   flyers:Math.max(0,expected.flyers-(outbound.flyers-returned.flyers)),
+  }
+  if(!productKeys.some(product=>missing[product]>0))continue
+  if(current.warehouse.p025.total<missing.p025||current.warehouse.p15.total<missing.p15||current.warehouse.flyers<missing.flyers)continue
+  const date=new Date().toISOString().slice(0,10)
+  const repairs:Movement[]=productKeys.flatMap(product=>{
+   const quantity=missing[product]
+   if(quantity===0)return []
+   const packageSize=getProductPackageSize(product)
+   const normalized=normalize(quantity,packageSize)
+   return [{id:`status-stock-repair-${order.id}-${product}`,date,product,type:'Излез',packages:product==='flyers'?0:normalized.packages,pieces:product==='flyers'?quantity:normalized.pieces,party:order.client,orderNumber:order.number,note:statusReturnRepairNote}]
+  })
+  current={
+   ...current,
+   warehouse:{
+    p025:normalize(current.warehouse.p025.total-missing.p025,15),
+    p15:normalize(current.warehouse.p15.total-missing.p15,6),
+    flyers:current.warehouse.flyers-missing.flyers,
+   },
+   orders:current.orders.map(item=>item.id===order.id?{...item,stockDeducted:true}:item),
+   movements:[...current.movements,...repairs],
+  }
+ }
+ return current
+}
+
 export const rebalanceReservations=(state:AppState):AppState=>{
  const capacity={p025:state.warehouse.p025.total,p15:state.warehouse.p15.total,flyers:state.warehouse.flyers}
  const decisions=new Map<string,OrderStatus>()
  state.orders.filter(order=>reservingStatuses.has(order.status)&&!order.stockDeducted).toSorted((a,b)=>a.date.localeCompare(b.date)||a.number.localeCompare(b.number)).forEach(order=>{const need=orderPieces(order),fits=need.p025<=capacity.p025&&need.p15<=capacity.p15&&need.flyers<=capacity.flyers;if(fits){capacity.p025-=need.p025;capacity.p15-=need.p15;capacity.flyers-=need.flyers}else decisions.set(order.id,'Чека залиха')})
  return decisions.size?{...state,orders:state.orders.map(order=>decisions.has(order.id)?{...order,status:'Чека залиха'}:order)}:state
 }
-export const hydrateState=(state:AppState)=>reconcileWaitingOrders(rebalanceReservations(ensureDocumentArchive({...state,stockThresholds:state.stockThresholds||{p025:300,p15:60,flyers:500},orders:state.orders.map(o=>{const {scannedPackages:_removed,...clean}=o as Order&{scannedPackages?:unknown};void _removed;const hydrated={...clean,qty025Pieces:clean.qty025Pieces||0,qty15Pieces:clean.qty15Pieces||0,free025Pieces:clean.free025Pieces||0,free15:clean.free15||0,free15Pieces:clean.free15Pieces||0,packed:{...clean.packed,free15:clean.packed.free15||false}};const packed=reservingStatuses.has(hydrated.status)&&allPacked(hydrated)?{...hydrated,status:'Спакувана' as const}:hydrated;const legacyDeducted=deductStatuses.has(packed.status)&&!packed.stockDeducted?{...packed,stockDeducted:true}:packed;return legacyDeducted.status==='Чека залиха'&&legacyDeducted.stockDeducted?{...legacyDeducted,stockDeducted:false}:legacyDeducted})})))
+export const hydrateState=(state:AppState)=>{
+ const normalized={...state,stockThresholds:state.stockThresholds||{p025:300,p15:60,flyers:500},orders:state.orders.map(o=>{const {scannedPackages:_removed,...clean}=o as Order&{scannedPackages?:unknown};void _removed;const hydrated={...clean,qty025Pieces:clean.qty025Pieces||0,qty15Pieces:clean.qty15Pieces||0,free025Pieces:clean.free025Pieces||0,free15:clean.free15||0,free15Pieces:clean.free15Pieces||0,packed:{...clean.packed,free15:clean.packed.free15||false}};const packed=reservingStatuses.has(hydrated.status)&&allPacked(hydrated)?{...hydrated,status:'Спакувана' as const}:hydrated;return packed.status==='Чека залиха'&&packed.stockDeducted?{...packed,stockDeducted:false}:packed})}
+ const repaired=repairIncorrectStatusReturns(ensureDocumentArchive(normalized))
+ return reconcileWaitingOrders(rebalanceReservations(normalizeWarehouseTotals(repaired)))
+}
 
 export const reserved=(s:AppState)=>{
   const snapshot=calculateWarehouseSnapshot(s)

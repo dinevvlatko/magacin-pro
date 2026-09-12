@@ -150,6 +150,34 @@ describe('warehouse engine', () => {
     expect(snapshot.received_stock.p025).toBe(15)
   })
 
+  it('keeps audit movement statistics separate from the physical and reserved stock', () => {
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 10, pieces: 0, total: 150, perPackage: 15 },
+        p15: { packages: 10, pieces: 0, total: 60, perPackage: 6 },
+        flyers: 50,
+      },
+      orders: [makeOrder({ id: 'reserved', status: 'Нова', qty025: 2 })],
+      clients: [],
+      movements: [
+        makeMovement({ id: 'in', product: 'p025', type: 'Влез', packages: 1 }),
+        makeMovement({ id: 'packed', product: 'p025', type: 'Излез', packages: 2, note: 'Автоматско одземање при пакување' }),
+        makeMovement({ id: 'manual-out', product: 'p15', type: 'Излез', packages: 3, note: 'Испорака без нарачка' }),
+        makeMovement({ id: 'returned', product: 'p15', type: 'Враќање', packages: 1 }),
+      ],
+    }
+
+    const snapshot = calculateWarehouseSnapshot(state)
+    expect(snapshot.physical_stock).toEqual({ p025: 150, p15: 60, flyers: 50 })
+    expect(snapshot.reserved_stock.p025).toBe(30)
+    expect(snapshot.available_stock.p025).toBe(120)
+    expect(snapshot.received_stock.p025).toBe(15)
+    expect(snapshot.automatic_packed_stock.p025).toBe(30)
+    expect(snapshot.manual_outbound_stock.p15).toBe(18)
+    expect(snapshot.reconciled_outbound_stock).toEqual({ p025: 0, p15: 0, flyers: 0 })
+    expect(snapshot.returned_stock.p15).toBe(6)
+  })
+
   it('does not subtract an already recorded packing movement twice when reserving exact stock', () => {
     const packedOrder = makeOrder({ id: 'packed', number: 'PG-2026-0001', status: 'Спакувана', stockDeducted: true, qty025: 30 })
     const firstOrder = makeOrder({ id: 'first', number: 'PG-2026-0002', status: 'Нова', qty025: 100 })
@@ -249,6 +277,63 @@ describe('warehouse engine', () => {
     expect(secondPacked?.warehouse.p025.total).toBe(0)
     expect(secondPacked?.warehouse.p15.total).toBe(0)
     expect(available(secondPacked!)).toEqual({ p025: 0, p15: 0, flyers: 0 })
+  })
+
+  it('keeps the warehouse empty while packed orders move through sent and delivered', () => {
+    const order = makeOrder({ id: 'status-chain', status: 'Спакувана', qty025: 113, qty15: 26, stockDeducted: true })
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 0, pieces: 0, total: 0, perPackage: 15 },
+        p15: { packages: 0, pieces: 0, total: 0, perPackage: 6 },
+        flyers: 0,
+      },
+      orders: [order],
+      clients: [],
+      movements: [],
+    }
+
+    const sent = changeOrderStatus(state, order, 'Испратена')!
+    const delivered = changeOrderStatus(sent, sent.orders[0], 'Доставена')!
+
+    expect(sent.warehouse).toEqual(state.warehouse)
+    expect(delivered.warehouse).toEqual(state.warehouse)
+    expect(delivered.orders[0]).toMatchObject({ status: 'Доставена', stockDeducted: true })
+    expect(delivered.movements).toHaveLength(0)
+  })
+
+  it('repairs the two delivered Skopje orders that were wrongly returned by the old status transition', () => {
+    const first = makeOrder({ id: 'delivered-1', number: 'PG-2026-0101', client: 'Скопје 1', status: 'Доставена', qty025: 113, qty15: 26, stockDeducted: false })
+    const second = makeOrder({ id: 'delivered-2', number: 'PG-2026-0102', client: 'Скопје 2', status: 'Доставена', qty025: 100, stockDeducted: true })
+    const movements = [
+      makeMovement({ id: 'first-p025-out', product: 'p025', type: 'Излез', packages: 113, orderNumber: first.number, note: 'Автоматско одземање при пакување' }),
+      makeMovement({ id: 'first-p15-out', product: 'p15', type: 'Излез', packages: 26, orderNumber: first.number, note: 'Автоматско одземање при пакување' }),
+      makeMovement({ id: 'first-p025-return', product: 'p025', type: 'Враќање', packages: 113, orderNumber: first.number, note: 'Автоматско враќање при откажување' }),
+      makeMovement({ id: 'first-p15-return', product: 'p15', type: 'Враќање', packages: 26, orderNumber: first.number, note: 'Автоматско враќање при откажување' }),
+      makeMovement({ id: 'second-p025-out', product: 'p025', type: 'Излез', packages: 100, orderNumber: second.number, note: 'Автоматско одземање при пакување' }),
+      makeMovement({ id: 'second-p025-return', product: 'p025', type: 'Враќање', packages: 100, orderNumber: second.number, note: 'Автоматско враќање при откажување' }),
+    ]
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 213, pieces: 0, total: 3195, perPackage: 15 },
+        p15: { packages: 26, pieces: 0, total: 156, perPackage: 6 },
+        flyers: 0,
+      },
+      orders: [first, second],
+      clients: [],
+      movements,
+    }
+
+    const repaired = hydrateState(state)
+    const repairedAgain = hydrateState(repaired)
+    const repairMovements = repaired.movements.filter(movement => movement.note.startsWith('Корекција: повторно одземање'))
+
+    expect(repaired.warehouse.p025.total).toBe(0)
+    expect(repaired.warehouse.p15.total).toBe(0)
+    expect(repaired.orders.every(order => order.stockDeducted)).toBe(true)
+    expect(repairMovements).toHaveLength(3)
+    expect(calculateWarehouseSnapshot(repaired).reconciled_outbound_stock).toEqual({ p025: 3195, p15: 156, flyers: 0 })
+    expect(repairedAgain.warehouse).toEqual(repaired.warehouse)
+    expect(repairedAgain.movements).toHaveLength(repaired.movements.length)
   })
 
   it('does not double-count stock when an order is cancelled twice', () => {
