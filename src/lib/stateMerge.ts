@@ -84,7 +84,7 @@ export const mergeConcurrentStates=(base:AppState,local:AppState,remote:AppState
  const orders=renumberDuplicateOrders(mergeEntities(base.orders,local.orders,remote.orders,'нарачката'),remote.orders)
  const movements=renumberDuplicateReceipts(mergeEntities(base.movements,local.movements,remote.movements,'движењето'),base.movements,remote.movements)
  const clients=dedupeClients(mergeEntities(base.clients,local.clients,remote.clients,'клиентот'),remote.clients)
- const merged:AppState={warehouse:mergeWarehouse(base.warehouse,local.warehouse,remote.warehouse),orders,clients,movements}
+ const merged:AppState={warehouse:mergeWarehouse(base.warehouse,local.warehouse,remote.warehouse),orders,clients,movements,warehouseLedgerVersion:Math.max(base.warehouseLedgerVersion||0,local.warehouseLedgerVersion||0,remote.warehouseLedgerVersion||0)}
  const demand=combinedReservationDemand(local,remote)
  const baseAvailable={
   p025: base.warehouse.p025.total,

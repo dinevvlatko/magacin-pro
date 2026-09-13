@@ -8,4 +8,4 @@ export interface Order { id:string; number:string; client:string; city:string; d
 export interface Client { id:string; name:string; city:string; phone:string; contactPerson:string; address:string }
 export interface Movement { id:string; date:string; product:ProductKey; type:MovementType; packages:number; pieces:number; party:string; orderNumber:string; note:string }
 export interface StockThresholds { p025:number; p15:number; flyers:number }
-export interface AppState { warehouse:Warehouse; orders:Order[]; clients:Client[]; movements:Movement[]; stockThresholds?:StockThresholds }
+export interface AppState { warehouse:Warehouse; orders:Order[]; clients:Client[]; movements:Movement[]; stockThresholds?:StockThresholds; warehouseLedgerVersion?:number }

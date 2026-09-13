@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { ArchiveRestore, ArrowLeftRight, CheckCircle2, ChevronRight, CirclePlus, Cloud, CloudOff, Eye, FileText, LogIn, LogOut, Package, Pencil, Printer, QrCode, RotateCcw, Search, Send, ShieldCheck, Trash2, Truck, Warehouse as WarehouseIcon } from 'lucide-react'
 import type { AppState, Movement, MovementType, Order, OrderStatus, ProductKey } from './types'
 import { demoState, makeOrderNumber } from './lib/data'
-import { activeStatuses, allowedTransitions, allPacked, applyOrderStatusTransition, available, breakdown, calculateWarehouseSnapshot, canReserveOrder, createOrderWithReservation, deductOrderStock, hydrateState, normalize, orderPieces, productName, reconcileWaitingOrders, reservationShortage, reserved, returnOrderStock, updatePackedItem } from './lib/logic'
+import { activeStatuses, allowedTransitions, allPacked, applyOrderStatusTransition, available, breakdown, calculateWarehouseSnapshot, canReserveOrder, createOrderWithReservation, deductOrderStock, hydrateState, isTechnicalStockMovement, normalize, orderPieces, productName, reconcileWaitingOrders, reservationShortage, reserved, returnOrderStock, updatePackedItem } from './lib/logic'
 import { supabase, syncEnabled } from './lib/supabase'
 import { useSyncedState, type SyncStatus } from './lib/useSyncedState'
 import type { LocalStateBackup } from './lib/storage'
@@ -124,7 +124,7 @@ function App(){
   const target=next[o.status]
   if(target){changeStatus(o,target);void recordAudit('order.qr_status_advanced','order',o.id,{number:o.number,from:o.status,to:target})}
  }
- const deleteOrder=(id:string)=>{const order=state.orders.find(item=>item.id===id);if(!order||!confirm('Да се избрише нарачката?'))return;setState(s=>({...s,orders:s.orders.filter(item=>item.id!==id)}));void recordAudit('order.deleted','order',id,{number:order.number,client:order.client})}
+ const deleteOrder=(id:string)=>{const order=state.orders.find(item=>item.id===id);if(!order)return;if(order.stockDeducted){alert('Спакувана или испорачана нарачка не може да се избрише затоа што е дел од магацинската историја. Ако робата е вратена, избери статус „Откажана“ за автоматски да се врати залихата.');return}if(!confirm('Да се избрише нарачката? Резервацијата ќе се ослободи.'))return;setState(s=>reconcileWaitingOrders({...s,orders:s.orders.filter(item=>item.id!==id)}));void recordAudit('order.deleted','order',id,{number:order.number,client:order.client})}
  const saveNewOrder=(o:Order)=>{setState(current=>{const saved=createOrderWithReservation(current,o);return {...current,orders:[saved,...current.orders],clients:current.clients.some(c=>c.name.toLowerCase()===saved.client.toLowerCase())?current.clients:[...current.clients,{id:crypto.randomUUID(),name:saved.client,city:saved.city,phone:'',contactPerson:'',address:''}]}});void recordAudit('order.created','order',o.id,{number:o.number,client:o.client,city:o.city});setShowOrder(false)}
  const editOrder=(o:Order)=>{if(o.stockDeducted&&!isAdmin){alert('Само администратор може да менува нарачка откако залихата е одземена.');return}if(o.stockDeducted&&!confirm('Оваа нарачка е веќе спакувана. При зачувување, старата количина ќе се врати и исправената повторно ќе се одземе. Продолжи?'))return;setEditingOrderId(o.id)}
  const saveEditedOrder=(candidate:Order)=>{
@@ -279,14 +279,6 @@ function ReportsPage({state}:{state:AppState}){
  const inPeriod=(date:string)=>period==='all'||(period==='month'?date.startsWith(monthPrefix):period==='year'?date.startsWith(yearPrefix):(!fromDate||date>=fromDate)&&(!toDate||date<=toDate))
  const statusMatch=(order:Order)=>status==='all'||(status==='active'?order.status!=='Откажана':order.status===status)
  const orders=state.orders.filter(order=>inPeriod(order.date)&&statusMatch(order)&&(client==='all'||order.client===client)&&(city==='all'||order.city===city)&&(`${order.number} ${order.client} ${order.city}`.toLowerCase().includes(query.trim().toLowerCase()))).toSorted((a,b)=>b.date.localeCompare(a.date)||b.number.localeCompare(a.number))
- const movementTotal=(movement:Movement)=>movement.product==='p025'?movement.packages*15+movement.pieces:movement.product==='p15'?movement.packages*6+movement.pieces:movement.pieces
- const issuedByOrder=state.movements.reduce((map,movement)=>{
-  if(!movement.orderNumber)return map
-  const current=map.get(movement.orderNumber)||{p025:0,p15:0,flyers:0}
-  const sign=movement.type==='Излез'||movement.type==='Оштетување'?1:movement.type==='Враќање'?-1:0
-  if(sign!==0)current[movement.product]+=sign*movementTotal(movement)
-  map.set(movement.orderNumber,current);return map
- },new Map<string,{p025:number;p15:number;flyers:number}>())
  const reportRows=orders.map(order=>{
   const quantities=orderPieces(order)
   const regular025=quantities.p025 - (order.free025*15+(order.free025Pieces||0))
@@ -295,10 +287,9 @@ function ReportsPage({state}:{state:AppState}){
   const gratis15=(order.free15||0)*6+(order.free15Pieces||0)
   const ordered025=quantities.p025
   const ordered15=quantities.p15
-  const movementIssued=issuedByOrder.get(order.number)
-  const issued025=Math.max(0,movementIssued?.p025??(order.stockDeducted?ordered025:0))
-  const issued15=Math.max(0,movementIssued?.p15??(order.stockDeducted?ordered15:0))
-  const issuedFlyers=Math.max(0,movementIssued?.flyers??(order.stockDeducted?order.flyers:0))
+  const issued025=order.stockDeducted?ordered025:0
+  const issued15=order.stockDeducted?ordered15:0
+  const issuedFlyers=order.stockDeducted?order.flyers:0
   const missing025=ordered025<=0
   return {order,regular025,gratis025,ordered025,regular15,gratis15,ordered15,orderedFlyers:order.flyers,issued025,issued15,issuedFlyers,missing025}
  })
@@ -332,12 +323,12 @@ function WarehouseFlowSummary({snapshot}:{snapshot:ReturnType<typeof calculateWa
   {product:'flyers' as const,packageSize:0},
  ]
  const amount=(value:number,perPackage:number)=>quantityBreakdown(value,perPackage)
- return <Card className="warehouse-flow-summary"><div className="section-title"><div><h3>Јасна состојба на залихата</h3><p>„Во магацин“ е физичката количина. „Резервирано“ е за нови нарачки и сè уште не е излезено.</p></div></div><div className="table-wrap"><table className="warehouse-flow-table"><thead><tr><th>Производ</th><th>Физички во магацин</th><th>Резервирано</th><th>Слободно</th><th>Влез – евиденција</th><th>Спакувано</th><th>Друг излез</th><th>Корекција на излез</th><th>Вратено</th></tr></thead><tbody>{rows.map(({product,packageSize})=><tr key={product}><td><b>{productName(product)}</b></td><td>{amount(snapshot.physical_stock[product],packageSize)}</td><td>{amount(snapshot.reserved_stock[product],packageSize)}</td><td className={snapshot.available_stock[product]===0?'stock-zero':''}>{amount(snapshot.available_stock[product],packageSize)}</td><td>{amount(snapshot.received_stock[product],packageSize)}</td><td>{amount(snapshot.automatic_packed_stock[product],packageSize)}</td><td>{amount(snapshot.manual_outbound_stock[product],packageSize)}</td><td>{amount(snapshot.reconciled_outbound_stock[product],packageSize)}</td><td>{amount(snapshot.returned_stock[product],packageSize)}</td></tr>)}</tbody></table></div><p className="warehouse-flow-note">„Спакувано“, „Друг излез“ и „Корекција“ се историски движења. Не се одземаат повторно од физичката количина.</p></Card>
+ return <Card className="warehouse-flow-summary"><div className="section-title"><div><h3>Јасна состојба на залихата</h3><p>„Во магацин“ е физичката количина. „Резервирано“ е за нови нарачки и сè уште не е излезено.</p></div></div><div className="table-wrap"><table className="warehouse-flow-table"><thead><tr><th>Производ</th><th>Физички во магацин</th><th>Резервирано</th><th>Слободно</th><th>Примено</th><th>Спакувано / излезено</th><th>Друг излез</th><th>Вратено</th></tr></thead><tbody>{rows.map(({product,packageSize})=><tr key={product}><td><b>{productName(product)}</b></td><td>{amount(snapshot.physical_stock[product],packageSize)}</td><td>{amount(snapshot.reserved_stock[product],packageSize)}</td><td className={snapshot.available_stock[product]===0?'stock-zero':''}>{amount(snapshot.available_stock[product],packageSize)}</td><td>{amount(snapshot.received_stock[product],packageSize)}</td><td>{amount(snapshot.automatic_packed_stock[product],packageSize)}</td><td>{amount(snapshot.manual_outbound_stock[product],packageSize)}</td><td>{amount(snapshot.returned_stock[product],packageSize)}</td></tr>)}</tbody></table></div><p className="warehouse-flow-note">Едноставно правило: приемница додава, „Спакувана“ одзема еднаш, а „Нова“ и „Во подготовка“ само резервираат.</p></Card>
 }
 const receiptItems=(receipt:ReceiptGroup)=>receipt.lines.map(line=>`${productName(line.product)}: ${line.product==='flyers'?`${line.pieces} пар.`:`${line.packages} пак.${line.pieces?` + ${line.pieces} пар.`:''}`}`).join(' • ')
 const ReceiptTable=({receipts,onView,onEdit}:{receipts:ReceiptGroup[];onView?:(receipt:ReceiptGroup)=>void;onEdit?:(receipt:ReceiptGroup)=>void})=>receipts.length===0?<Empty text="Сè уште нема внесени приемници."/>:<div className="table-wrap"><table className="receipt-table"><thead><tr><th>Приемница</th><th>Датум</th><th>Производи и количини</th><th>Работници / тим</th><th>Забелешка</th>{(onView||onEdit)&&<th>Акции</th>}</tr></thead><tbody>{receipts.map(receipt=><tr key={receipt.number}><td><b>{receipt.number}</b></td><td>{receipt.date}</td><td>{receiptItems(receipt)}</td><td>{receipt.party||'—'}</td><td>{receipt.note||'—'}</td>{(onView||onEdit)&&<td><div className="archive-actions">{onView&&<button className="ghost compact-action" onClick={()=>onView(receipt)}><Eye size={16}/> Преглед</button>}{onEdit&&<button className="ghost compact-action" onClick={()=>onEdit(receipt)}><Pencil size={16}/> Измени</button>}</div></td>}</tr>)}</tbody></table></div>
 function MovementsPage({state}:{state:AppState}){return <><PageHeader title="Историја на залиха"/><Card><MovementTable movements={state.movements}/></Card></>}
-const MovementTable=({movements}:{movements:AppState['movements']})=>movements.length===0?<Empty text="Сè уште нема движења на залиха."/>:<div className="table-wrap"><table><thead><tr><th>Датум</th><th>Производ</th><th>Тип</th><th>Пакети</th><th>Парчиња</th><th>Клиент / тим</th><th>Документ / нарачка</th><th>Забелешка</th></tr></thead><tbody>{movements.map(m=><tr key={m.id}><td>{m.date}</td><td>{productName(m.product)}</td><td><span className="status">{m.type}</span></td><td>{m.packages}</td><td>{m.pieces}</td><td>{m.party||'—'}</td><td>{m.orderNumber||'—'}</td><td>{m.note||'—'}</td></tr>)}</tbody></table></div>
+const MovementTable=({movements}:{movements:AppState['movements']})=>{const visible=movements.filter(movement=>!isTechnicalStockMovement(movement));return visible.length===0?<Empty text="Сè уште нема движења на залиха."/>:<div className="table-wrap"><table><thead><tr><th>Датум</th><th>Производ</th><th>Тип</th><th>Пакети</th><th>Парчиња</th><th>Клиент / тим</th><th>Документ / нарачка</th><th>Забелешка</th></tr></thead><tbody>{visible.map(m=><tr key={m.id}><td>{m.date}</td><td>{productName(m.product)}</td><td><span className="status">{m.type}</span></td><td>{m.packages}</td><td>{m.pieces}</td><td>{m.party||'—'}</td><td>{m.orderNumber||'—'}</td><td>{m.note||'—'}</td></tr>)}</tbody></table></div>}
 function PrintingPage({state,printOrder,printReceipt,changeStatus,editReceipt}:{state:AppState;printOrder:(order:Order)=>void;printReceipt:(receipt:ReceiptGroup)=>void;changeStatus:(order:Order,status:OrderStatus)=>void;editReceipt:(receipt:ReceiptGroup)=>void}){
  const [selectedReceipt,setSelectedReceipt]=useState<ReceiptGroup|null>(null)
  const [selectedOrder,setSelectedOrder]=useState<Order|null>(null)

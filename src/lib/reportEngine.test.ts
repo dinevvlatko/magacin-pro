@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AppState, Order } from '../types'
+import type { AppState, Movement, Order } from '../types'
 import { buildReportSnapshot, productTotalsSummary, summarizeClientTotals } from './reportEngine'
 
 const order=(id:string,number:string,client:string,city:string,status:Order['status'],qty025=1,free025=0,qty15=0,free15=0,flyers=0):Order=>({
@@ -70,5 +70,24 @@ describe('report engine', () => {
     const client = summarizeClientTotals(base, 'Клиент 1')
     expect(client.orderCount).toBe(2)
     expect(client.ordered.p025).toBe(45)
+  })
+
+  it('does not include technical stock repair rows in printable totals', () => {
+    const base = state([])
+    const repair: Movement = {
+      id: 'repair',
+      date: '2026-07-24',
+      product: 'p025',
+      type: 'Враќање',
+      packages: 50,
+      pieces: 0,
+      party: 'Техничка корекција',
+      orderNumber: 'PG-2026-0004',
+      note: 'Корекција: вратена задоцнета корекција што погрешно се одзела од нова приемница',
+    }
+
+    const snapshot = buildReportSnapshot({ ...base, movements: [repair] })
+
+    expect(snapshot.returned.p025).toBe(0)
   })
 })

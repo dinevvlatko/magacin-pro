@@ -174,7 +174,6 @@ describe('warehouse engine', () => {
     expect(snapshot.received_stock.p025).toBe(15)
     expect(snapshot.automatic_packed_stock.p025).toBe(30)
     expect(snapshot.manual_outbound_stock.p15).toBe(18)
-    expect(snapshot.reconciled_outbound_stock).toEqual({ p025: 0, p15: 0, flyers: 0 })
     expect(snapshot.returned_stock.p15).toBe(6)
   })
 
@@ -301,7 +300,7 @@ describe('warehouse engine', () => {
     expect(delivered.movements).toHaveLength(0)
   })
 
-  it('does not consume a new receipt to retry an older status repair', () => {
+  it('removes the known 50-package surplus from the old status repair exactly once', () => {
     const oldOrder = makeOrder({ id: 'old-delivered', number: 'PG-2026-0004', status: 'Доставена', qty025: 50, stockDeducted: true })
     const state: AppState = {
       warehouse: {
@@ -320,11 +319,15 @@ describe('warehouse engine', () => {
 
     const hydrated = hydrateState(state)
 
-    expect(hydrated.warehouse.p025).toMatchObject({ total: 1275, packages: 85, pieces: 0 })
+    const hydratedAgain = hydrateState(hydrated)
+
+    expect(hydrated.warehouse.p025).toMatchObject({ total: 525, packages: 35, pieces: 0 })
+    expect(hydrated.warehouseLedgerVersion).toBe(2)
+    expect(hydratedAgain.warehouse.p025).toEqual(hydrated.warehouse.p025)
     expect(hydrated.movements.some(movement => movement.note.startsWith('Корекција: повторно одземање'))).toBe(false)
   })
 
-  it('returns the deferred 50-package correction that reduced an 85-package receipt to 35', () => {
+  it('keeps the correct 35-package balance and removes old technical repair rows', () => {
     const oldOrder = makeOrder({ id: 'old-delivered', number: 'PG-2026-0004', status: 'Доставена', qty025: 50, stockDeducted: true })
     const state: AppState = {
       warehouse: {
@@ -346,13 +349,35 @@ describe('warehouse engine', () => {
     const repaired = hydrateState(state)
     const repairedAgain = hydrateState(repaired)
 
-    expect(repaired.warehouse.p025).toMatchObject({ total: 1275, packages: 85, pieces: 0 })
+    expect(repaired.warehouse.p025).toMatchObject({ total: 525, packages: 35, pieces: 0 })
     expect(repaired.movements.filter(movement => movement.orderNumber === oldOrder.number)).toEqual([
       expect.objectContaining({ id: 'old-packing', type: 'Излез', packages: 50 }),
     ])
     expect(repaired.movements.some(movement => movement.id === 'deferred-repair-reversal-deferred-repair')).toBe(false)
     expect(repairedAgain.warehouse).toEqual(repaired.warehouse)
     expect(repairedAgain.movements).toHaveLength(repaired.movements.length)
+  })
+
+  it('removes a remaining 50-package surplus down to zero for the same production incident', () => {
+    const oldOrder = makeOrder({ id: 'old-delivered', number: 'PG-2026-0004', status: 'Доставена', qty025: 50, stockDeducted: true })
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 50, pieces: 0, total: 750, perPackage: 15 },
+        p15: { packages: 0, pieces: 0, total: 0, perPackage: 6 },
+        flyers: 0,
+      },
+      orders: [oldOrder],
+      clients: [],
+      movements: [
+        makeMovement({ id: 'receipt-85', product: 'p025', type: 'Влез', packages: 85, orderNumber: 'PR-0002' }),
+        makeMovement({ id: 'old-packing', product: 'p025', type: 'Излез', packages: 50, orderNumber: oldOrder.number, note: 'Автоматско одземање при пакување' }),
+      ],
+    }
+
+    const hydrated = hydrateState(state)
+
+    expect(hydrated.warehouse.p025).toMatchObject({ total: 0, packages: 0, pieces: 0 })
+    expect(hydrateState(hydrated).warehouse.p025.total).toBe(0)
   })
 
   it('does not double-count stock when an order is cancelled twice', () => {

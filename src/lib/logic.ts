@@ -10,7 +10,6 @@ export type WarehouseSnapshot = {
   returned_stock: WarehouseStockByProduct
   automatic_packed_stock: WarehouseStockByProduct
   manual_outbound_stock: WarehouseStockByProduct
-  reconciled_outbound_stock: WarehouseStockByProduct
   damaged_stock: WarehouseStockByProduct
   corrected_stock: WarehouseStockByProduct
 }
@@ -67,6 +66,9 @@ const automaticPackingNote = 'Автоматско одземање при па�
 const automaticReturnNote = 'Автоматско враќање при откажување'
 const statusReturnRepairNote = 'Корекција: повторно одземање по погрешно враќање при промена на статус'
 const deferredRepairReversalNote = 'Корекција: вратена задоцнета корекција што погрешно се одзела од нова приемница'
+const currentWarehouseLedgerVersion = 2
+
+export const isTechnicalStockMovement=(movement:Movement)=>movement.note===statusReturnRepairNote||movement.note===deferredRepairReversalNote
 
 const movementTotal=(movement:Movement)=>movement.product==='p025'?movement.packages*15+movement.pieces:movement.product==='p15'?movement.packages*6+movement.pieces:movement.pieces
 
@@ -83,7 +85,6 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
   const returned_stock = zeroStock()
   const automatic_packed_stock = zeroStock()
   const manual_outbound_stock = zeroStock()
-  const reconciled_outbound_stock = zeroStock()
   const damaged_stock = zeroStock()
   const corrected_stock = zeroStock()
 
@@ -105,6 +106,7 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
   // movement. Movements are an audit trail, so replaying them here would
   // subtract or add the same quantity a second time.
   state.movements.forEach(movement => {
+    if (isTechnicalStockMovement(movement)) return
     const total = movementTotal(movement)
     if (movement.type === 'Влез') {
       received_stock[movement.product] += total
@@ -114,7 +116,6 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
     }
     if (movement.type === 'Излез') {
       if (movement.note === automaticPackingNote) automatic_packed_stock[movement.product] += total
-      else if (movement.note === statusReturnRepairNote) reconciled_outbound_stock[movement.product] += total
       else manual_outbound_stock[movement.product] += total
     }
     if (movement.type === 'Корекција') {
@@ -133,7 +134,6 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
     returned_stock[product] = Math.max(0, returned_stock[product])
     automatic_packed_stock[product] = Math.max(0, automatic_packed_stock[product])
     manual_outbound_stock[product] = Math.max(0, manual_outbound_stock[product])
-    reconciled_outbound_stock[product] = Math.max(0, reconciled_outbound_stock[product])
     damaged_stock[product] = Math.max(0, damaged_stock[product])
     corrected_stock[product] = Math.max(0, corrected_stock[product])
   })
@@ -153,7 +153,6 @@ export const calculateWarehouseSnapshot=(state:AppState):WarehouseSnapshot=>{
     returned_stock,
     automatic_packed_stock,
     manual_outbound_stock,
-    reconciled_outbound_stock,
     damaged_stock,
     corrected_stock,
   }
@@ -300,49 +299,27 @@ export const ensureDocumentArchive=(state:AppState):AppState=>{
  return {...state,movements:[...baseline,...state.movements.filter(m=>m.orderNumber!=='PR-0001'&&!/^PRI-\d{4}-\d+$/.test(m.orderNumber))]}
 }
 
-// A previous release retried an old stock repair whenever new goods arrived.
-// In the reported case the warehouse was empty, an 85-package receipt arrived,
-// and a trailing 50-package repair consumed it, leaving 35. Reverse only that
-// exact, auditable shape: the final movement is the repair and its quantity is
-// precisely the gap between the latest receipt and the physical balance.
-export const reverseDeferredReceiptRepair=(state:AppState):AppState=>{
- const repair=state.movements.at(-1)
- if(!repair||repair.type!=='Излез'||repair.note!==statusReturnRepairNote)return state
- const reversalId=`deferred-repair-reversal-${repair.id}`
- if(state.movements.some(movement=>movement.id===reversalId))return state
- const latestReceiptNumber=state.movements
-  .filter(movement=>movement.type==='Влез'&&/^PR-\d{4}$/.test(movement.orderNumber)&&movement.orderNumber!=='PR-0001')
-  .map(movement=>movement.orderNumber)
-  .toSorted((left,right)=>Number(right.slice(3))-Number(left.slice(3)))[0]
- if(!latestReceiptNumber)return state
- const received=state.movements
-  .filter(movement=>movement.type==='Влез'&&movement.orderNumber===latestReceiptNumber&&movement.product===repair.product)
-  .reduce((total,movement)=>total+movementTotal(movement),0)
- const physical=repair.product==='p025'?state.warehouse.p025.total:repair.product==='p15'?state.warehouse.p15.total:state.warehouse.flyers
- const correction=movementTotal(repair)
- if(received<=physical||received-physical!==correction)return state
- const warehouse=repair.product==='p025'
-  ?{...state.warehouse,p025:normalize(state.warehouse.p025.total+correction,15)}
-  :repair.product==='p15'
-   ?{...state.warehouse,p15:normalize(state.warehouse.p15.total+correction,6)}
-   :{...state.warehouse,flyers:state.warehouse.flyers+correction}
- const reversal:Movement={...repair,id:reversalId,type:'Враќање',date:new Date().toISOString().slice(0,10),note:deferredRepairReversalNote}
- return {...state,warehouse,movements:[...state.movements,reversal]}
-}
-
-// Remove the bookkeeping noise left by the repaired status bug. Each repair
-// was paired with an erroneous automatic return, so removing both audit rows
-// leaves the real packing exit and the authoritative physical balance intact.
-export const cleanStatusRepairAudit=(state:AppState):AppState=>{
- const completedOrders=new Set(state.orders.filter(order=>deductStatuses.has(order.status)).map(order=>order.number))
- const repairedOrders=new Set(state.movements.filter(movement=>completedOrders.has(movement.orderNumber)&&movement.note===statusReturnRepairNote).map(movement=>movement.orderNumber))
- if(repairedOrders.size===0)return state
- const movements=state.movements.filter(movement=>!repairedOrders.has(movement.orderNumber)||(
-  movement.note!==statusReturnRepairNote&&
-  movement.note!==deferredRepairReversalNote&&
-  movement.note!==automaticReturnNote
- ))
- return movements.length===state.movements.length?state:{...state,movements}
+// One old production release restored 50 packages from PG-2026-0004 after
+// they had already left the warehouse. The next release then preserved that
+// surplus. This narrow, versioned migration removes it once and removes only
+// the technical repair/return noise; the real packing exit remains in history.
+export const migrateWarehouseLedgerV2=(state:AppState):AppState=>{
+ const repairedOrderNumbers=new Set(state.movements.filter(isTechnicalStockMovement).map(movement=>movement.orderNumber))
+ const movements=state.movements.filter(movement=>{
+  if(isTechnicalStockMovement(movement))return false
+  return !(movement.note===automaticReturnNote&&repairedOrderNumbers.has(movement.orderNumber))
+ })
+ if((state.warehouseLedgerVersion||0)>=currentWarehouseLedgerVersion)return movements.length===state.movements.length?state:{...state,movements}
+ const legacyOrder=state.orders.find(order=>order.number==='PG-2026-0004'&&deductStatuses.has(order.status)&&order.stockDeducted&&order.qty025===50)
+ const hasPackingExit=Boolean(legacyOrder&&state.movements.some(movement=>movement.orderNumber===legacyOrder.number&&movement.product==='p025'&&movement.type==='Излез'&&movement.note===automaticPackingNote&&movement.packages>=50))
+ const hasReceipt85=state.movements.some(movement=>movement.type==='Влез'&&movement.product==='p025'&&movement.orderNumber!=='PR-0001'&&/^PR-\d{4}$/.test(movement.orderNumber)&&movement.packages===85&&movement.pieces===0)
+ const removeSurplus=hasPackingExit&&hasReceipt85&&state.warehouse.p025.total>=50*15
+ return {
+  ...state,
+  warehouseLedgerVersion:currentWarehouseLedgerVersion,
+  warehouse:removeSurplus?{...state.warehouse,p025:normalize(state.warehouse.p025.total-50*15,15)}:state.warehouse,
+  movements,
+ }
 }
 
 export const rebalanceReservations=(state:AppState):AppState=>{
@@ -352,10 +329,9 @@ export const rebalanceReservations=(state:AppState):AppState=>{
  return decisions.size?{...state,orders:state.orders.map(order=>decisions.has(order.id)?{...order,status:'Чека залиха'}:order)}:state
 }
 export const hydrateState=(state:AppState)=>{
- const normalized={...state,stockThresholds:state.stockThresholds||{p025:300,p15:60,flyers:500},orders:state.orders.map(o=>{const {scannedPackages:_removed,...clean}=o as Order&{scannedPackages?:unknown};void _removed;const hydrated={...clean,qty025Pieces:clean.qty025Pieces||0,qty15Pieces:clean.qty15Pieces||0,free025Pieces:clean.free025Pieces||0,free15:clean.free15||0,free15Pieces:clean.free15Pieces||0,packed:{...clean.packed,free15:clean.packed.free15||false}};const packed=reservingStatuses.has(hydrated.status)&&allPacked(hydrated)?{...hydrated,status:'Спакувана' as const}:hydrated;return packed.status==='Чека залиха'&&packed.stockDeducted?{...packed,stockDeducted:false}:packed})}
- const repaired=reverseDeferredReceiptRepair(ensureDocumentArchive(normalized))
- const cleaned=cleanStatusRepairAudit(repaired)
- return reconcileWaitingOrders(rebalanceReservations(normalizeWarehouseTotals(cleaned)))
+ const normalized={...state,stockThresholds:state.stockThresholds||{p025:300,p15:60,flyers:500},orders:state.orders.map(o=>{const {scannedPackages:_removed,...clean}=o as Order&{scannedPackages?:unknown};void _removed;const hydrated={...clean,qty025Pieces:clean.qty025Pieces||0,qty15Pieces:clean.qty15Pieces||0,free025Pieces:clean.free025Pieces||0,free15:clean.free15||0,free15Pieces:clean.free15Pieces||0,packed:{...clean.packed,free15:clean.packed.free15||false}};return hydrated.status==='Чека залиха'&&hydrated.stockDeducted?{...hydrated,stockDeducted:false}:hydrated})}
+ const migrated=migrateWarehouseLedgerV2(ensureDocumentArchive(normalized))
+ return reconcileWaitingOrders(rebalanceReservations(normalizeWarehouseTotals(migrated)))
 }
 
 export const reserved=(s:AppState)=>{

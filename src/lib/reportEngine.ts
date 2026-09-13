@@ -1,5 +1,5 @@
 import type { AppState, Movement, Order, OrderStatus, ProductKey } from '../types'
-import { activeStatuses, getItemQuantity, getProductPackageSize, orderPieces, reservingStatuses } from './logic'
+import { activeStatuses, getItemQuantity, getProductPackageSize, isTechnicalStockMovement, orderPieces, reservingStatuses } from './logic'
 
 export type ReportFilter = {
   dateFrom?: string
@@ -197,6 +197,7 @@ export const buildReportSnapshot = (state: AppState, filter: ReportFilter = {}):
   })
 
   state.movements.forEach(movement => {
+    if (isTechnicalStockMovement(movement)) return
     if (!inPeriod(movement.date, filter)) return
     if (!passesDocumentFilter(movement, filter)) return
     if (filter.movementType && filter.movementType !== 'all' && movement.type !== filter.movementType) return
