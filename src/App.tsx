@@ -17,18 +17,14 @@ import { formatDocumentDate } from './lib/date'
 import { createOrderQrDataUrl } from './lib/orderQr'
 import { createReceiptAtomic, loadReceiptModule, receiptItemUnits, ReceiptSchemaMissingError, validateReceiptItems, type ProductRecord, type ReceiptInput, type ReceiptItemDraft } from './lib/receipts'
 import { BrandLockup, BrandMark } from './components/Brand'
+import { ReportPrint, ReportsPage } from './components/ReportsPage'
+import { receiptGroups, type ReceiptGroup, type ReportPrintDocument } from './lib/reportDocuments'
 import './index.css'
 import './components/AdminPage.css'
 
 const statusClass=(s:OrderStatus)=>`status ${s.replaceAll(' ','-').toLowerCase()}`
 const todayLocal=()=>{const date=new Date();return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`}
 const packingNumber=(order:Order)=>order.number.replace(/^PG-/, 'SP-')
-type ReceiptGroup={number:string;date:string;lines:Movement[];party:string;note:string}
-const receiptGroups=(movements:Movement[]):ReceiptGroup[]=>{
- const groups=new Map<string,Movement[]>()
- movements.filter(m=>m.type==='Влез'&&/^PR-\d{4}$/.test(m.orderNumber)).forEach(m=>groups.set(m.orderNumber,[...(groups.get(m.orderNumber)||[]),m]))
- return [...groups].map(([number,lines])=>({number,date:lines[0].date,lines,party:lines.map(line=>line.party).find(Boolean)||'',note:lines.map(line=>line.note).find(Boolean)||''})).sort((a,b)=>Number(b.number.slice(3))-Number(a.number.slice(3)))
-}
 const localDemo=import.meta.env.DEV&&new URLSearchParams(window.location.search).has('local-demo')
 const localMode=!syncEnabled||localDemo
 type ReceiptModuleStatus='loading'|'ready'|'missing'|'error'
@@ -46,7 +42,8 @@ function App(){
  const [receiptModuleError,setReceiptModuleError]=useState('')
  const [editingReceiptNumber,setEditingReceiptNumber]=useState<string|null>(null)
  const [receiptToPrint,setReceiptToPrint]=useState<ReceiptGroup|null>(null)
- const [printMode,setPrintMode]=useState<'packing'|'receipt'>('packing')
+ const [reportToPrint,setReportToPrint]=useState<ReportPrintDocument|null>(null)
+ const [printMode,setPrintMode]=useState<'packing'|'receipt'|'report'>('packing')
  const [printQrDataUrl,setPrintQrDataUrl]=useState('')
  const [query,setQuery]=useState('')
  const [selectedLoadIds,setSelectedLoadIds]=useState<Set<string>>(()=>new Set())
@@ -163,6 +160,7 @@ function App(){
  }
  const printOrder=async(o:Order)=>{setSelected(o.id);setPrintMode('packing');setPrintQrDataUrl(await createOrderQrDataUrl(o.id));setTimeout(()=>window.print(),100)}
  const printReceipt=(receipt:ReceiptGroup)=>{setReceiptToPrint(receipt);setPrintMode('receipt');setPrintQrDataUrl('');setTimeout(()=>window.print(),50)}
+ const printReport=(report:ReportPrintDocument)=>{setReportToPrint(report);setPrintMode('report');setPrintQrDataUrl('');setTimeout(()=>window.print(),50)}
  return <div className="app"><SideNav page={page} setPage={setPage} isAdmin={isAdmin}/><main className="main">
   {page==='dashboard'&&<Dashboard state={state} r={r} a={a} setPage={setPage} openOrder={id=>{setSelected(id);setPage('packing')}} openPacked={()=>{setSelected(state.orders.find(o=>o.status==='Спакувана')?.id||null);setPage('packing')}}/>}
   {page==='orders'&&<Orders state={state} query={query} setQuery={setQuery} selectedIds={selectedLoadIds} setSelectedIds={setSelectedLoadIds} onOpen={id=>{setSelected(id);setPage('packing')}} onNew={()=>setShowOrder(true)} onEdit={editOrder} onChangeStatus={changeStatus} onDelete={isAdmin?deleteOrder:undefined}/>}
@@ -170,7 +168,7 @@ function App(){
   {page==='warehouse'&&<WarehousePage state={state} onEntry={()=>setShowEntry(true)} onReceipt={openNewReceipt} onEditReceipt={receipt=>setEditingReceiptNumber(receipt.number)}/>}
   {page==='clients'&&<ClientsPage state={state}/>}
   {page==='movements'&&<MovementsPage state={state}/>}
-  {page==='reports'&&<ReportsPage state={state}/>}
+  {page==='reports'&&<ReportsPage state={state} onPrint={printReport}/>}
   {page==='printing'&&<PrintingPage state={state} printOrder={printOrder} printReceipt={printReceipt} changeStatus={changeStatus} editReceipt={receipt=>setEditingReceiptNumber(receipt.number)}/>}
   {page==='admin'&&isAdmin&&session&&<AdminPage currentUserId={session.user.id}/>}
   {page==='settings'&&<SettingsPage
@@ -190,7 +188,7 @@ function App(){
  {showEntry&&<StockEntry onClose={()=>setShowEntry(false)} onSave={saveStockEntry}/>}
  {showReceipt&&<ReceiptEntry products={products} onClose={()=>setShowReceipt(false)} onSave={saveReceipt}/>}
  {editingReceipt&&<EditReceipt receipt={editingReceipt} onClose={()=>setEditingReceiptNumber(null)} onSave={saveEditedReceipt}/>}
- <div className="print-only">{printMode==='packing'&&selectedOrder?<PackingPrint o={selectedOrder} qrDataUrl={printQrDataUrl}/>:printMode==='receipt'&&receiptToPrint?<ReceiptPrint receipt={receiptToPrint}/>:null}</div>
+ <div className="print-only">{printMode==='packing'&&selectedOrder?<PackingPrint o={selectedOrder} qrDataUrl={printQrDataUrl}/>:printMode==='receipt'&&receiptToPrint?<ReceiptPrint receipt={receiptToPrint}/>:printMode==='report'&&reportToPrint?<ReportPrint report={reportToPrint}/>:null}</div>
  </div>
 }
 
@@ -263,47 +261,6 @@ function Packing({order,orders,onSelect,patchPacked,changeStatus,advanceOrder,pr
 const PackRowV2=({checked,disabled,onChange,title,qty,detail}:{checked:boolean;disabled:boolean;onChange:(value:boolean)=>void;title:string;qty:number;detail:string})=><label className={`pack-row ${checked?'done':''} ${disabled?'locked':''}`}><input type="checkbox" checked={checked} disabled={disabled} onChange={event=>onChange(event.target.checked)}/><div className="check-ui">{checked&&<CheckCircle2/>}</div><div><h3>{title}</h3><p>{detail}</p></div><strong>{qty}</strong></label>
 
 
-type ReportPeriod='all'|'month'|'year'|'custom'
-type ReportStatus='active'|'all'|OrderStatus
-function ReportsPage({state}:{state:AppState}){
- const [period,setPeriod]=useState<ReportPeriod>('all')
- const [status,setStatus]=useState<ReportStatus>('active')
- const [client,setClient]=useState('all')
- const [city,setCity]=useState('all')
- const [query,setQuery]=useState('')
- const [fromDate,setFromDate]=useState('')
- const [toDate,setToDate]=useState('')
- const now=new Date();const monthPrefix=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;const yearPrefix=String(now.getFullYear())
- const clients=[...new Set(state.orders.map(order=>order.client.trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'mk'))
- const cities=[...new Set(state.orders.map(order=>order.city.trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'mk'))
- const inPeriod=(date:string)=>period==='all'||(period==='month'?date.startsWith(monthPrefix):period==='year'?date.startsWith(yearPrefix):(!fromDate||date>=fromDate)&&(!toDate||date<=toDate))
- const statusMatch=(order:Order)=>status==='all'||(status==='active'?order.status!=='Откажана':order.status===status)
- const orders=state.orders.filter(order=>inPeriod(order.date)&&statusMatch(order)&&(client==='all'||order.client===client)&&(city==='all'||order.city===city)&&(`${order.number} ${order.client} ${order.city}`.toLowerCase().includes(query.trim().toLowerCase()))).toSorted((a,b)=>b.date.localeCompare(a.date)||b.number.localeCompare(a.number))
- const reportRows=orders.map(order=>{
-  const quantities=orderPieces(order)
-  const regular025=quantities.p025 - (order.free025*15+(order.free025Pieces||0))
-  const gratis025=(order.free025*15)+(order.free025Pieces||0)
-  const regular15=quantities.p15 - ((order.free15||0)*6+(order.free15Pieces||0))
-  const gratis15=(order.free15||0)*6+(order.free15Pieces||0)
-  const ordered025=quantities.p025
-  const ordered15=quantities.p15
-  const issued025=order.stockDeducted?ordered025:0
-  const issued15=order.stockDeducted?ordered15:0
-  const issuedFlyers=order.stockDeducted?order.flyers:0
-  const missing025=ordered025<=0
-  return {order,regular025,gratis025,ordered025,regular15,gratis15,ordered15,orderedFlyers:order.flyers,issued025,issued15,issuedFlyers,missing025}
- })
- const totals=reportRows.reduce((sum,row)=>({regular025:sum.regular025+row.regular025,gratis025:sum.gratis025+row.gratis025,ordered025:sum.ordered025+row.ordered025,regular15:sum.regular15+row.regular15,gratis15:sum.gratis15+row.gratis15,ordered15:sum.ordered15+row.ordered15,orderedFlyers:sum.orderedFlyers+row.orderedFlyers,issued025:sum.issued025+row.issued025,issued15:sum.issued15+row.issued15,issuedFlyers:sum.issuedFlyers+row.issuedFlyers}),{regular025:0,gratis025:0,ordered025:0,regular15:0,gratis15:0,ordered15:0,orderedFlyers:0,issued025:0,issued15:0,issuedFlyers:0})
- const reservedTotals=reportRows.filter(row=>['Нова','Во подготовка'].includes(row.order.status)).reduce((sum,row)=>({ordered025:sum.ordered025+row.ordered025,ordered15:sum.ordered15+row.ordered15,orderedFlyers:sum.orderedFlyers+row.orderedFlyers}),{ordered025:0,ordered15:0,orderedFlyers:0})
- const missing025Orders=reportRows.filter(row=>row.missing025)
- const clientRows=[...reportRows.reduce((map,row)=>{const key=row.order.client.trim()||'Без клиент';const current=map.get(key)||{client:key,orders:0,ordered025:0,gratis025:0,issued025:0,ordered15:0,gratis15:0,issued15:0,orderedFlyers:0,issuedFlyers:0};current.orders+=1;current.ordered025+=row.ordered025;current.gratis025+=row.gratis025;current.issued025+=row.issued025;current.ordered15+=row.ordered15;current.gratis15+=row.gratis15;current.issued15+=row.issued15;current.orderedFlyers+=row.orderedFlyers;current.issuedFlyers+=row.issuedFlyers;map.set(key,current);return map},new Map<string,{client:string;orders:number;ordered025:number;gratis025:number;issued025:number;ordered15:number;gratis15:number;issued15:number;orderedFlyers:number;issuedFlyers:number}>()).values()].sort((a,b)=>(b.issued025+b.issued15+b.issuedFlyers)-(a.issued025+a.issued15+a.issuedFlyers))
- const resetFilters=()=>{setPeriod('all');setStatus('active');setClient('all');setCity('all');setQuery('');setFromDate('');setToDate('')}
- return <><PageHeader title="Целосен извештај"/><Card className="report-filters"><div className="report-toolbar"><label>Период<select value={period} onChange={event=>setPeriod(event.target.value as ReportPeriod)}><option value="all">Сите датуми</option><option value="month">Овој месец</option><option value="year">Оваа година</option><option value="custom">Избран период</option></select></label>{period==='custom'&&<><label>Од<input type="date" value={fromDate} onChange={event=>setFromDate(event.target.value)}/></label><label>До<input type="date" value={toDate} onChange={event=>setToDate(event.target.value)}/></label></>}<label>Статус<select value={status} onChange={event=>setStatus(event.target.value as ReportStatus)}><option value="active">Сите освен откажани</option><option value="all">Сите статуси</option><option value="Нова">Нова</option><option value="Во подготовка">Во подготовка</option><option value="Спакувана">Спакувана</option><option value="Излезена">Излезена</option><option value="Испратена">Испратена</option><option value="Доставена">Доставена</option><option value="Откажана">Откажана</option><option value="Чека залиха">Чека залиха</option></select></label><label>Клиент<select value={client} onChange={event=>setClient(event.target.value)}><option value="all">Сите клиенти</option>{clients.map(item=><option key={item}>{item}</option>)}</select></label><label>Град<select value={city} onChange={event=>setCity(event.target.value)}><option value="all">Сите градови</option>{cities.map(item=><option key={item}>{item}</option>)}</select></label><label className="report-search">Пребарај<input placeholder="Број, клиент или град" value={query} onChange={event=>setQuery(event.target.value)}/></label><button className="ghost" onClick={resetFilters}>Исчисти филтри</button></div></Card>
- {missing025Orders.length>0&&<Card><div className="stock-validation warning"><CloudOff size={18}/><span><b>Контрола на податоци:</b> {missing025Orders.length} нарачки немаат внесено Шише 0.250 мл: {missing025Orders.map(row=>row.order.number).join(', ')}.</span></div></Card>}
- <div className="report-grid"><Card className="report-total"><span>Нарачано {productName('p025')}</span><strong>{totals.ordered025} шишиња</strong><small>Редовно {totals.regular025} • гратис {totals.gratis025}</small></Card><Card className="report-total"><span>Реално издадено {productName('p025')}</span><strong>{totals.issued025} шишиња</strong><small>{Math.floor(totals.issued025/15)} пак. + {totals.issued025%15} пар.</small></Card><Card className="report-total"><span>Резервирано {productName('p025')}</span><strong>{reservedTotals.ordered025} шишиња</strong><small>Нова и Во подготовка</small></Card><Card className="report-total"><span>Нарачано {productName('p15')}</span><strong>{totals.ordered15} БиБ</strong><small>Редовно {totals.regular15} • гратис {totals.gratis15}</small></Card><Card className="report-total"><span>Реално издадено {productName('p15')}</span><strong>{totals.issued15} БиБ</strong><small>{Math.floor(totals.issued15/6)} пак. + {totals.issued15%6} пар.</small></Card><Card className="report-total"><span>Резервирано {productName('p15')}</span><strong>{reservedTotals.ordered15} БиБ</strong><small>Нова и Во подготовка</small></Card><Card className="report-total"><span>Нарачани флаери</span><strong>{totals.orderedFlyers}</strong><small>Според нарачките</small></Card><Card className="report-total"><span>Реално издадени флаери</span><strong>{totals.issuedFlyers}</strong><small>Според магацински излези</small></Card><Card className="report-total"><span>Резервирани флаери</span><strong>{reservedTotals.orderedFlyers}</strong><small>Нова и Во подготовка</small></Card><Card className="report-total"><span>Нарачки во извештај</span><strong>{orders.length}</strong><small>Според избраните филтри</small></Card></div>
- <Card><div className="section-title"><div><h3>Детален извештај по нарачка</h3><p>Нарачано и реално издадено се прикажани одделно.</p></div></div>{reportRows.length===0?<Empty text="Нема нарачки за избраните филтри."/>:<div className="table-wrap"><table><thead><tr><th>Датум</th><th>Нарачка</th><th>Клиент</th><th>Град</th><th>Статус</th><th>0,250 редовно</th><th>0,250 гратис</th><th>0,250 нарачано</th><th>0,250 издадено</th><th>BiB редовно</th><th>BiB гратис</th><th>BiB нарачано</th><th>BiB издадено</th><th>Флаери нарачано</th><th>Флаери издадено</th></tr></thead><tbody>{reportRows.map(row=><tr key={row.order.id}><td>{row.order.date}</td><td><b>{row.order.number}</b>{row.missing025&&<><br/><small>⚠ Нема 0,250</small></>}</td><td>{row.order.client}</td><td>{row.order.city}</td><td><span className={statusClass(row.order.status)}>{row.order.status}</span></td><td>{row.regular025}</td><td>{row.gratis025}</td><td><b>{row.ordered025}</b></td><td><b>{row.issued025}</b></td><td>{row.regular15}</td><td>{row.gratis15}</td><td><b>{row.ordered15}</b></td><td><b>{row.issued15}</b></td><td>{row.orderedFlyers}</td><td><b>{row.issuedFlyers}</b></td></tr>)}</tbody><tfoot><tr><th colSpan={5}>ВКУПНО</th><th>{totals.regular025}</th><th>{totals.gratis025}</th><th>{totals.ordered025}</th><th>{totals.issued025}</th><th>{totals.regular15}</th><th>{totals.gratis15}</th><th>{totals.ordered15}</th><th>{totals.issued15}</th><th>{totals.orderedFlyers}</th><th>{totals.issuedFlyers}</th></tr></tfoot></table></div>}</Card>
- <Card><div className="section-title"><div><h3>Збирно по клиент</h3><p>Нарачано, гратис и реално издадено по клиент.</p></div></div>{clientRows.length===0?<Empty text="Нема податоци."/>:<div className="table-wrap"><table><thead><tr><th>Клиент</th><th>Нарачки</th><th>0,250 нарачано</th><th>0,250 гратис</th><th>0,250 издадено</th><th>BiB нарачано</th><th>BiB гратис</th><th>BiB издадено</th><th>Флаери нарачано</th><th>Флаери издадено</th></tr></thead><tbody>{clientRows.map(row=><tr key={row.client}><td><b>{row.client}</b></td><td>{row.orders}</td><td>{row.ordered025}</td><td>{row.gratis025}</td><td>{row.issued025}</td><td>{row.ordered15}</td><td>{row.gratis15}</td><td>{row.issued15}</td><td>{row.orderedFlyers}</td><td>{row.issuedFlyers}</td></tr>)}</tbody></table></div>}</Card></>
-}
 function WarehousePage({state,onEntry,onReceipt,onEditReceipt}:{state:AppState;onEntry:()=>void;onReceipt:()=>void;onEditReceipt:(receipt:ReceiptGroup)=>void}){
  const receipts=receiptGroups(state.movements)
  const snapshot=calculateWarehouseSnapshot(state)

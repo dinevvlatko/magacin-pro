@@ -21,6 +21,11 @@ export interface ItemQuantityRow {
   freePieces: number
 }
 
+const todayLocal = () => {
+  const date = new Date()
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+}
+
 export const normalize=(total:number,perPackage:number):StockUnit=>({packages:Math.floor(total/perPackage),pieces:total%perPackage,total,perPackage})
 export const breakdown=(packages:number,pieces=0)=>`${packages} пак. + ${pieces} пар.`
 
@@ -180,7 +185,7 @@ const productStateCanSatisfy=(s:AppState,order:Order)=>{
 
 export const deductOrderStock=(s:AppState,o:Order,status=o.status):AppState|null=>{
   if (o.stockDeducted) {
-    return { ...s, orders: s.orders.map(x => x.id === o.id ? { ...x, status } : x) }
+    return { ...s, orders: s.orders.map(x => x.id === o.id ? { ...x, status, ...(status === 'Доставена' ? { deliveredAt: todayLocal() } : {}) } : x) }
   }
   const need = orderPieces(o)
   // The order being packed is already a soft reservation. Check the stock
@@ -190,7 +195,7 @@ export const deductOrderStock=(s:AppState,o:Order,status=o.status):AppState|null
   if (snapshot.available_stock.p025 < need.p025 || snapshot.available_stock.p15 < need.p15 || snapshot.available_stock.flyers < need.flyers) {
     return null
   }
-  const date = new Date().toISOString().slice(0, 10)
+  const date = todayLocal()
   const warehouse = {
     p025: normalize(Math.max(0, snapshot.physical_stock.p025 - need.p025), 15),
     p15: normalize(Math.max(0, snapshot.physical_stock.p15 - need.p15), 6),
@@ -199,7 +204,7 @@ export const deductOrderStock=(s:AppState,o:Order,status=o.status):AppState|null
   return {
     ...s,
     warehouse,
-    orders: s.orders.map(x => x.id === o.id ? { ...x, status, stockDeducted: true } : x),
+    orders: s.orders.map(x => x.id === o.id ? { ...x, status, stockDeducted: true, ...(status === 'Доставена' ? { deliveredAt: date } : {}) } : x),
     movements: [
       ...s.movements,
       { id: crypto.randomUUID(), date, product: 'p025', type: 'Излез', packages: o.qty025 + o.free025, pieces: (o.qty025Pieces ?? 0) + (o.free025Pieces ?? 0), party: o.client, orderNumber: o.number, note: automaticPackingNote },
@@ -216,7 +221,7 @@ export const returnOrderStock=(s:AppState,o:Order):AppState=>{
     return { ...s, orders: s.orders.map(x => x.id === o.id ? { ...x, status: 'Откажана' } : x) }
   }
   const need=orderPieces(current)
-  const date=new Date().toISOString().slice(0, 10)
+  const date=todayLocal()
   const warehouse = {
     p025: normalize(Math.max(0, s.warehouse.p025.total + need.p025), 15),
     p15: normalize(Math.max(0, s.warehouse.p15.total + need.p15), 6),
@@ -248,7 +253,8 @@ export const changeOrderStatus=(s:AppState,o:Order,next:OrderStatus):AppState|nu
   // status-only. Returning it here used to put packed goods back in stock on
   // the "Спакувана" -> "Испратена" transition.
   if (deductStatuses.has(current.status) && deductStatuses.has(next)) {
-    return { ...s, orders: s.orders.map(x => x.id === o.id ? { ...x, status: next, stockDeducted: true } : x) }
+    const deliveredAt = todayLocal()
+    return { ...s, orders: s.orders.map(x => x.id === o.id ? { ...x, status: next, stockDeducted: true, ...(next === 'Доставена' ? { deliveredAt } : {}) } : x) }
   }
 
   if (next === 'Нова' || next === 'Во подготовка') {

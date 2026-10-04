@@ -97,6 +97,7 @@ describe('stock safeguards',()=>{
   expect(updated).not.toBeNull()
   expect(updated?.orders[0].status).toBe('Доставена')
   expect(updated?.orders[0].stockDeducted).toBe(true)
+  expect(updated?.orders[0].deliveredAt).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   expect(updated?.warehouse.p025.total).toBe(1500)
  })
  it('migrates old sent orders without re-deducting stock on hydrate',()=>{
