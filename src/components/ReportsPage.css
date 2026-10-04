@@ -101,6 +101,10 @@
   margin: 0;
 }
 
+.report-filters.sales-only-filters .report-toolbar {
+  grid-template-columns: repeat(3, minmax(170px, 1fr));
+}
+
 .report-filters .report-toolbar label {
   display: grid;
   align-content: end;
@@ -278,6 +282,10 @@
   }
 
   .report-filters .report-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .report-filters.sales-only-filters .report-toolbar {
     grid-template-columns: 1fr;
   }
 
