@@ -48,3 +48,39 @@ describe('sales report print', () => {
     expect(html).not.toContain('<table')
   })
 })
+
+describe('dispatch note print', () => {
+  it('includes the saved company, contact, address and cargo delivery data', () => {
+    const report: ReportPrintDocument = {
+      kind: 'dispatch',
+      product: 'all',
+      periodLabel: 'Сите датуми',
+      generatedAt: '2026-10-05T12:00:00.000Z',
+      orders: [{ ...deliveredOrder, client: 'K2 Клиент', city: 'Скопје' }],
+      receipts: [],
+      clients: [{
+        id: 'client-1',
+        name: 'k2 клиент',
+        city: 'Скопје',
+        address: 'Ул. Тест 12',
+        contactPerson: 'Ана Тест',
+        phone: '070 000 000',
+        companyNumber: '1234567',
+        taxNumber: 'MK123456789',
+        bankAccount: '',
+        email: '',
+        cargoInfo: 'Карго терминал Центар',
+        note: '',
+      }],
+    }
+
+    const html = renderToStaticMarkup(<ReportPrint report={report} />)
+
+    expect(html).toContain('ИСПРАТНИЦА')
+    expect(html).toContain('Лице за контакт')
+    expect(html).toContain('Ана Тест')
+    expect(html).toContain('Ул. Тест 12, Скопје')
+    expect(html).toContain('1234567')
+    expect(html).toContain('Карго терминал Центар')
+  })
+})

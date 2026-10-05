@@ -1,4 +1,4 @@
-import type { Movement, Order, ProductKey } from '../types'
+import type { Client, Movement, Order, ProductKey } from '../types'
 import { getProductPackageSize, orderPieces } from './logic'
 
 export type ReportProduct = ProductKey | 'all'
@@ -25,6 +25,7 @@ export type ReportPrintDocument = {
   generatedAt: string
   orders: Order[]
   receipts: ReceiptGroup[]
+  clients?: Client[]
 }
 
 export const reportProductKeys: ProductKey[] = ['p025', 'p15', 'flyers']

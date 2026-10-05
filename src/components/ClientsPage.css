@@ -1,0 +1,140 @@
+.client-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.client-detail-actions span,
+.client-detail-actions small {
+  display: block;
+}
+
+.client-detail-actions span {
+  color: #eef7ff;
+  font-weight: 800;
+}
+
+.client-detail-actions small {
+  margin-top: 4px;
+  color: #718895;
+  font-size: 12px;
+}
+
+.client-dossier {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.client-dossier > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-height: 64px;
+  padding: 12px;
+  border: 1px solid rgba(121, 208, 244, .11);
+  border-radius: 13px;
+  background: #0b1319;
+}
+
+.client-dossier > div.wide {
+  grid-column: 1 / -1;
+}
+
+.client-dossier svg {
+  flex: none;
+  margin-top: 1px;
+  color: #55e4ff;
+}
+
+.client-dossier span,
+.client-dossier strong {
+  display: block;
+}
+
+.client-dossier span {
+  min-width: 0;
+  color: #718895;
+  font-size: 11px;
+}
+
+.client-dossier strong {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  color: #eaf7ff;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.client-editor-intro {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(49, 218, 255, .18);
+  border-radius: 14px;
+  background: rgba(49, 218, 255, .07);
+}
+
+.client-editor-intro > svg {
+  flex: none;
+  color: #5ce5ff;
+}
+
+.client-editor-intro strong,
+.client-editor-intro small {
+  display: block;
+}
+
+.client-editor-intro small {
+  margin-top: 4px;
+  color: #7f96a3;
+  line-height: 1.4;
+}
+
+.client-editor .field input,
+.client-editor .field textarea {
+  width: 100%;
+}
+
+.client-editor-error {
+  grid-column: 1 / -1;
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 91, 112, .3);
+  border-radius: 11px;
+  background: rgba(255, 91, 112, .09);
+  color: #ff9baa;
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .client-detail-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .client-detail-actions .ghost {
+    width: 100%;
+  }
+
+  .client-dossier {
+    grid-template-columns: 1fr;
+  }
+
+  .client-dossier > div.wide,
+  .client-editor-intro,
+  .client-editor-error {
+    grid-column: 1;
+  }
+
+  .client-editor .modal-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .client-editor .modal-actions button {
+    width: 100%;
+  }
+}

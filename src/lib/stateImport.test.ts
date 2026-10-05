@@ -42,6 +42,15 @@ describe('mergeIndependentStates',()=>{
   local.warehouse.p025={packages:1,pieces:0,total:15,perPackage:15}
   const merged=mergeIndependentStates(shared,local)
   expect(merged.movements.filter(item=>item.id.startsWith('baseline-pr-0001-'))).toHaveLength(3)
-  expect(merged.movements.filter(item=>item.orderNumber!=='PR-0001')).toHaveLength(0)
+ expect(merged.movements.filter(item=>item.orderNumber!=='PR-0001')).toHaveLength(0)
+ })
+
+ it('keeps all company and delivery fields while merging the same client',()=>{
+  const shared=state(),local=state()
+  shared.clients=[{id:'shared-client',name:'Алфа',city:'Скопје',phone:'',contactPerson:'',address:''}]
+  local.clients=[{id:'local-client',name:'алфа',city:'',phone:'070000000',contactPerson:'Ана',address:'Улица 1',taxNumber:'MK123',companyNumber:'1234567',bankAccount:'200-1',email:'info@alfa.mk',cargoInfo:'Карго Центар',note:'Позвони'}]
+  const merged=mergeIndependentStates(shared,local)
+  expect(merged.clients).toHaveLength(1)
+  expect(merged.clients[0]).toMatchObject({phone:'070000000',contactPerson:'Ана',address:'Улица 1',taxNumber:'MK123',companyNumber:'1234567',bankAccount:'200-1',email:'info@alfa.mk',cargoInfo:'Карго Центар',note:'Позвони'})
  })
 })

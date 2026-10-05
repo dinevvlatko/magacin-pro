@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Printer } from 'lucide-react'
 import type { AppState, Order, OrderStatus, ProductKey } from '../types'
+import { clientAddressLine, findClientByName } from '../lib/clients'
 import { orderPieces, productName } from '../lib/logic'
 import { formatDocumentDate } from '../lib/date'
 import {
@@ -200,6 +201,7 @@ export function ReportsPage({ state, onPrint }: { state: AppState; onPrint: (rep
     generatedAt: new Date().toISOString(),
     orders: documentKind === 'orders' ? selectedOrders : [],
     receipts: documentKind === 'receipts' ? selectedReceipts : [],
+    clients: state.clients,
   })
 
   const printSalesReport = () => onPrint({
@@ -209,6 +211,7 @@ export function ReportsPage({ state, onPrint }: { state: AppState; onPrint: (rep
     generatedAt: new Date().toISOString(),
     orders,
     receipts: [],
+    clients: state.clients,
   })
 
   const openSalesReport = () => {
@@ -310,12 +313,15 @@ export function ReportPrint({ report }: { report: ReportPrintDocument }) {
   const receiptRows = report.receipts.flatMap(receipt => products
     .map(product => ({ receipt, product, amount: receiptProductAmount(receipt, product) }))
     .filter(row => row.amount.units > 0))
+  const singleDispatchOrder = isDispatch && report.orders.length === 1 ? report.orders[0] : undefined
+  const singleDispatchClient = singleDispatchOrder ? findClientByName(report.clients, singleDispatchOrder.client) : undefined
 
   return <div className="print-sheet report-print-sheet">
     <header className="packing-print-head"><h1>{isSales ? 'ИЗВЕШТАЈ ЗА ПРОДАЖБА' : isDispatch ? (documents.length === 1 ? 'ИСПРАТНИЦА' : 'ЗБИРНА ИСПРАТНИЦА') : 'ПРЕГЛЕД НА ПРИЕМНИЦИ'}</h1></header>
     <section className="packing-print-meta report-print-meta">{isSales ? <><div><span>Период</span><strong>{report.periodLabel}</strong></div><div><span>Доставени нарачки</span><b>{documents.length}</b></div><div><span>Датум на печатење</span><b>{formatDocumentDate(report.generatedAt.slice(0, 10))}</b></div></> : <><div><span>Период</span><strong>{report.periodLabel}</strong></div><div><span>Производ</span><strong>{report.product === 'all' ? 'Сите производи' : productName(report.product)}</strong></div><div><span>Број на документи</span><b>{documents.length}</b></div><div><span>Датум на печатење</span><b>{formatDocumentDate(report.generatedAt.slice(0, 10))}</b></div></>}</section>
+    {singleDispatchOrder&&<section className="dispatch-recipient"><div className="wide"><span>Клиент / фирма</span><strong>{singleDispatchOrder.client}</strong></div><div><span>Матичен број</span><strong>{singleDispatchClient?.companyNumber||'—'}</strong></div><div><span>ЕДБ</span><strong>{singleDispatchClient?.taxNumber||'—'}</strong></div><div><span>Лице за контакт</span><strong>{singleDispatchClient?.contactPerson||'—'}</strong><small>{singleDispatchClient?.phone||''}</small></div><div><span>Адреса за достава</span><strong>{singleDispatchClient?clientAddressLine(singleDispatchClient)||singleDispatchOrder.city:singleDispatchOrder.city}</strong></div><div className="wide"><span>Карго / инструкции за достава</span><strong>{singleDispatchClient?.cargoInfo||'—'}</strong></div></section>}
     {!isSales && <table className="packing-print-table report-print-table"><thead><tr><th>Датум</th><th>Документ</th><th>{isDispatch ? 'Клиент / град' : 'Работници / тим'}</th><th>Производ</th><th>Пакети</th><th>Парчиња</th><th>Вкупно</th>{isDispatch && <th>Статус</th>}</tr></thead><tbody>
-      {isDispatch ? dispatchRows.map(({ order, product, amount }) => <tr key={`${order.id}-${product}`}><td>{formatDocumentDate(order.date)}</td><td><strong>{order.number}</strong></td><td><strong>{order.client}</strong><small>{order.city}</small></td><td>{productName(product)}</td><td>{product === 'flyers' ? '—' : amount.packages}</td><td>{amount.pieces}</td><td><strong>{amount.units} {productUnit(product)}</strong></td><td>{order.status}</td></tr>) : receiptRows.map(({ receipt, product, amount }) => <tr key={`${receipt.number}-${product}`}><td>{formatDocumentDate(receipt.date)}</td><td><strong>{receipt.number}</strong></td><td>{receipt.party || '—'}</td><td>{productName(product)}</td><td>{product === 'flyers' ? '—' : amount.packages}</td><td>{amount.pieces}</td><td><strong>{amount.units} {productUnit(product)}</strong></td></tr>)}
+      {isDispatch ? dispatchRows.map(({ order, product, amount }) => {const profile=findClientByName(report.clients,order.client);return <tr key={`${order.id}-${product}`}><td>{formatDocumentDate(order.date)}</td><td><strong>{order.number}</strong></td><td><strong>{order.client}</strong><small>{profile?clientAddressLine(profile)||order.city:order.city}</small>{profile?.contactPerson&&<small>Контакт: {profile.contactPerson}{profile.phone?` • ${profile.phone}`:''}</small>}</td><td>{productName(product)}</td><td>{product === 'flyers' ? '—' : amount.packages}</td><td>{amount.pieces}</td><td><strong>{amount.units} {productUnit(product)}</strong></td><td>{order.status}</td></tr>}) : receiptRows.map(({ receipt, product, amount }) => <tr key={`${receipt.number}-${product}`}><td>{formatDocumentDate(receipt.date)}</td><td><strong>{receipt.number}</strong></td><td>{receipt.party || '—'}</td><td>{productName(product)}</td><td>{product === 'flyers' ? '—' : amount.packages}</td><td>{amount.pieces}</td><td><strong>{amount.units} {productUnit(product)}</strong></td></tr>)}
     </tbody></table>}
     <section className="report-print-totals"><h2>Вкупно по производ</h2>{products.map(product => isSales ? <div key={product}><span>{productName(product)}</span><strong>{salesTotals[product].regular.units} {productUnit(product)} продадено</strong><small>Гратис {salesTotals[product].free.units} • вкупно испорачано {salesTotals[product].total.units}</small></div> : <div key={product}><span>{productName(product)}</span><strong>{totals[product].units} {productUnit(product)}</strong><small>{amountLabel(totals[product].packages, totals[product].pieces, product)}</small></div>)}</section>
     <div className="report-print-signatures"><div className="packing-sign"><span>{isDispatch ? 'Предал' : 'Подготвил'}</span><i /></div><div className="packing-sign"><span>{isDispatch ? 'Примил' : 'Проверил'}</span><i /></div></div>

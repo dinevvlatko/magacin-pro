@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ArchiveRestore, ArrowLeftRight, CheckCircle2, ChevronRight, CirclePlus, Cloud, CloudOff, Eye, FileText, LogIn, LogOut, Package, Pencil, Printer, QrCode, RotateCcw, Search, Send, ShieldCheck, Trash2, Truck, Warehouse as WarehouseIcon } from 'lucide-react'
-import type { AppState, Movement, MovementType, Order, OrderStatus, ProductKey } from './types'
+import type { AppState, Client, Movement, MovementType, Order, OrderStatus, ProductKey } from './types'
 import { demoState, makeOrderNumber } from './lib/data'
 import { activeStatuses, allowedTransitions, allPacked, applyOrderStatusTransition, available, breakdown, calculateWarehouseSnapshot, canReserveOrder, createOrderWithReservation, deductOrderStock, hydrateState, isTechnicalStockMovement, normalize, orderPieces, productName, reconcileWaitingOrders, reservationShortage, reserved, returnOrderStock, updatePackedItem } from './lib/logic'
 import { supabase, syncEnabled } from './lib/supabase'
@@ -123,6 +123,18 @@ function App(){
  }
  const deleteOrder=(id:string)=>{const order=state.orders.find(item=>item.id===id);if(!order)return;if(order.stockDeducted){alert('Спакувана или испорачана нарачка не може да се избрише затоа што е дел од магацинската историја. Ако робата е вратена, избери статус „Откажана“ за автоматски да се врати залихата.');return}if(!confirm('Да се избрише нарачката? Резервацијата ќе се ослободи.'))return;setState(s=>reconcileWaitingOrders({...s,orders:s.orders.filter(item=>item.id!==id)}));void recordAudit('order.deleted','order',id,{number:order.number,client:order.client})}
  const saveNewOrder=(o:Order)=>{setState(current=>{const saved=createOrderWithReservation(current,o);return {...current,orders:[saved,...current.orders],clients:current.clients.some(c=>c.name.toLowerCase()===saved.client.toLowerCase())?current.clients:[...current.clients,{id:crypto.randomUUID(),name:saved.client,city:saved.city,phone:'',contactPerson:'',address:''}]}});void recordAudit('order.created','order',o.id,{number:o.number,client:o.client,city:o.city});setShowOrder(false)}
+ const saveClientProfile=(client:Client,previousName?:string)=>{
+  const isNew=!state.clients.some(item=>item.id===client.id)
+  setState(current=>{
+   const exists=current.clients.some(item=>item.id===client.id)
+   const clients=exists?current.clients.map(item=>item.id===client.id?client:item):[client,...current.clients]
+   const previousNormalized=(previousName||'').trim().toLocaleLowerCase('mk-MK')
+   const renamed=Boolean(previousName)&&previousNormalized!==client.name.trim().toLocaleLowerCase('mk-MK')
+   const orders=renamed?current.orders.map(order=>order.client.trim().toLocaleLowerCase('mk-MK')===previousNormalized?{...order,client:client.name}:order):current.orders
+   return {...current,clients,orders}
+  })
+  void recordAudit(isNew?'client.created':'client.updated','client',client.id,{name:client.name,city:client.city,company_number:client.companyNumber||'',contact_person:client.contactPerson})
+ }
  const editOrder=(o:Order)=>{if(o.stockDeducted&&!isAdmin){alert('Само администратор може да менува нарачка откако залихата е одземена.');return}if(o.stockDeducted&&!confirm('Оваа нарачка е веќе спакувана. При зачувување, старата количина ќе се врати и исправената повторно ќе се одземе. Продолжи?'))return;setEditingOrderId(o.id)}
  const saveEditedOrder=(candidate:Order)=>{
   const original=state.orders.find(order=>order.id===candidate.id);if(!original)return
@@ -166,7 +178,7 @@ function App(){
   {page==='orders'&&<Orders state={state} query={query} setQuery={setQuery} selectedIds={selectedLoadIds} setSelectedIds={setSelectedLoadIds} onOpen={id=>{setSelected(id);setPage('packing')}} onNew={()=>setShowOrder(true)} onEdit={editOrder} onChangeStatus={changeStatus} onDelete={isAdmin?deleteOrder:undefined}/>}
   {page==='packing'&&<Packing order={packingOrder} onSelect={setSelected} orders={packingOrders} patchPacked={patchPacked} changeStatus={changeStatus} advanceOrder={advanceOrder} printOrder={printOrder} onEdit={editOrder} fromQr={Boolean(linkedOrderId&&packingOrder?.id===linkedOrderId)}/>}
   {page==='warehouse'&&<WarehousePage state={state} onEntry={()=>setShowEntry(true)} onReceipt={openNewReceipt} onEditReceipt={receipt=>setEditingReceiptNumber(receipt.number)}/>}
-  {page==='clients'&&<ClientsPage state={state}/>}
+  {page==='clients'&&<ClientsPage state={state} onSaveClient={saveClientProfile}/>}
   {page==='movements'&&<MovementsPage state={state}/>}
   {page==='reports'&&<ReportsPage state={state} onPrint={printReport}/>}
   {page==='printing'&&<PrintingPage state={state} printOrder={printOrder} printReceipt={printReceipt} changeStatus={changeStatus} editReceipt={receipt=>setEditingReceiptNumber(receipt.number)}/>}

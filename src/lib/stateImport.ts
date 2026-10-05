@@ -30,7 +30,19 @@ const mergeClients=(primary:Client[],imported:Client[])=>{
   const index=result.findIndex(client=>normalized(client.name)===normalized(candidate.name))
   if(index<0){result.push({...candidate});return}
   const current=result[index]
-  result[index]={...current,city:current.city||candidate.city,phone:current.phone||candidate.phone,contactPerson:current.contactPerson||candidate.contactPerson,address:current.address||candidate.address}
+  result[index]={
+   ...current,
+   city:current.city||candidate.city,
+   phone:current.phone||candidate.phone,
+   contactPerson:current.contactPerson||candidate.contactPerson,
+   address:current.address||candidate.address,
+   taxNumber:current.taxNumber||candidate.taxNumber,
+   companyNumber:current.companyNumber||candidate.companyNumber,
+   bankAccount:current.bankAccount||candidate.bankAccount,
+   email:current.email||candidate.email,
+   cargoInfo:current.cargoInfo||candidate.cargoInfo,
+   note:current.note||candidate.note,
+  }
  })
  return result
 }
