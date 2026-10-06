@@ -178,7 +178,10 @@ export const normalizeWarehouseTotals=(state:AppState):AppState=>{
 }
 
 const productStateCanSatisfy=(s:AppState,order:Order)=>{
-  const snapshot=calculateWarehouseSnapshot(s)
+  // The order may already be present in the state as an active reservation.
+  // Exclude it before checking whether it can reserve its own quantity,
+  // otherwise an exact-stock transition requires the same stock twice.
+  const snapshot=calculateWarehouseSnapshot({...s,orders:s.orders.filter(item=>item.id!==order.id)})
   const needed=orderPieces(order)
   return needed.p025 <= snapshot.available_stock.p025 && needed.p15 <= snapshot.available_stock.p15 && needed.flyers <= snapshot.available_stock.flyers
 }

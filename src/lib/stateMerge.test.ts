@@ -40,6 +40,17 @@ describe('conflict-safe warehouse merge',()=>{
   const base=state([],15),local=state([order('local','PG-2026-0001')],15),remote=state([order('remote','PG-2026-0001')],15)
   expect(()=>mergeConcurrentStates(base,local,remote)).toThrow(StateMergeError)
  })
+
+ it('does not count the same existing reservation twice when a receipt arrives',()=>{
+  const existing=order('existing','PG-2026-0001')
+  const base=state([existing],15)
+  const local={...state([existing],15),clients:[{id:'client-1',name:'Нов клиент',city:'Скопје',phone:'',contactPerson:'',address:''}]}
+  const remote={...state([existing],30),movements:[{id:'receipt-line',date:'2026-08-17',product:'p025' as const,type:'Влез' as const,packages:1,pieces:0,party:'Тим',orderNumber:'PR-0002',note:'Нова залиха'}]}
+  const merged=mergeConcurrentStates(base,local,remote)
+  expect(merged.warehouse.p025.total).toBe(30)
+  expect(merged.orders).toHaveLength(1)
+  expect(merged.clients).toHaveLength(1)
+ })
 })
 
 describe('stock safeguards',()=>{
@@ -54,6 +65,14 @@ describe('stock safeguards',()=>{
   const reconciled=reconcileWaitingOrders(state([second,first],15))
   expect(reconciled.orders.find(item=>item.id==='first')?.status).toBe('Нова')
   expect(reconciled.orders.find(item=>item.id==='second')?.status).toBe('Чека залиха')
+ })
+ it('activates a waiting order after newly received stock covers active reservations and the order',()=>{
+  const active=order('active','PG-2026-0001',1),waiting={...order('waiting','PG-2026-0002',1),status:'Чека залиха' as const}
+  const before=state([active,waiting],15)
+  const received={...before,warehouse:{...before.warehouse,p025:{packages:2,pieces:0,total:30,perPackage:15}}}
+  const reconciled=reconcileWaitingOrders(received)
+  expect(reconciled.orders.find(item=>item.id==='waiting')?.status).toBe('Нова')
+  expect(available(reconciled).p025).toBe(0)
  })
  it('migrates old overbooked active orders to waiting status on load',()=>{
   const first=order('first','PG-2026-0001',1),second=order('second','PG-2026-0002',1),hydrated=hydrateState(state([first,second],15))
@@ -99,6 +118,13 @@ describe('stock safeguards',()=>{
   expect(updated?.orders[0].stockDeducted).toBe(true)
   expect(updated?.orders[0].deliveredAt).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   expect(updated?.warehouse.p025.total).toBe(1500)
+ })
+ it('can return an exactly stocked packed order to active without requiring the stock twice',()=>{
+  const original=order('exact','PG-2026-0001')
+  const packed=deductOrderStock(state([original],15),original,'Спакувана')!
+  const reopened=applyOrderStatusTransition(packed,packed.orders[0],'Нова')
+  expect(reopened?.orders[0].status).toBe('Нова')
+  expect(reopened?.warehouse.p025.total).toBe(15)
  })
  it('migrates old sent orders without re-deducting stock on hydrate',()=>{
   const original={...order('legacy','PG-2026-0001'),status:'Испратена' as const,stockDeducted:false}

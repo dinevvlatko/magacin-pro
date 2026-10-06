@@ -130,6 +130,33 @@ export function useSyncedState(){
   return()=>{if(saveTimerRef.current)window.clearTimeout(saveTimerRef.current)}
  },[session,state,syncReady])
 
+ const refreshSharedState=useCallback(async()=>{
+  if(!session||!syncReady)return false
+  setSyncStatus('syncing');setSyncError('')
+  // A receipt updates the shared row inside a database function. If a normal
+  // state save is still in flight, let its optimistic-lock retry finish first.
+  for(let attempt=0;attempt<40&&pendingRef.current;attempt+=1){
+   await new Promise(resolve=>window.setTimeout(resolve,50))
+  }
+  const {data,error}=await supabase.from('shared_warehouse_state').select('id,state,updated_at,updated_by').eq('id','main').single<SharedWarehouseRow>()
+  if(error||!data){setSyncStatus('error');setSyncError(error?.message||'Не може да се освежи состојбата на магацинот.');return false}
+  const remote=hydrateState(data.state),remoteBase=persistedBase(data.state,remote)
+  const current=stateRef.current,base=baseStateRef.current
+  try{
+   const needsMerge=serialized(current)!==serialized(base)&&serialized(current)!==serialized(remote)
+   const next=needsMerge?mergeConcurrentStates(base,current,remote):remote
+   baseStateRef.current=remoteBase;baseVersionRef.current=data.updated_at;stateRef.current=next;setState(next);saveState(next)
+   setSyncStatus(serialized(next)===serialized(remoteBase)?'synced':'syncing')
+   return true
+  }catch(mergeError){
+   // The database result (including the receipt) is authoritative. Keep it
+   // visible even if a concurrent local change cannot be merged safely.
+   baseStateRef.current=remoteBase;baseVersionRef.current=data.updated_at;stateRef.current=remote;setState(remote);saveState(remote)
+   setSyncStatus('error');setSyncError(mergeError instanceof StateMergeError?mergeError.message:'Магацинот е освежен, но една истовремена промена не можеше да се спои.')
+   return true
+  }
+ },[session,syncReady])
+
  const reconcileLocalBackup=useCallback(async(mode:'merge'|'replace'|'discard')=>{
   if(mode==='discard'){clearPreSyncBackup();setLocalBackup(null);markSharedSyncReady();return true}
   if(!session||!localBackup||!syncReady||syncStatus!=='synced'){setSyncError('Почекај прво да заврши тековната синхронизација.');return false}
@@ -153,5 +180,5 @@ export function useSyncedState(){
  },[localBackup,profile?.role,session,syncReady,syncStatus])
 
  const recordAudit=useCallback(async(action:string,entityType:string,entityId:string|null,details:AuditDetails={})=>{if(!userId)return;const {error}=await supabase.from('activity_log').insert({actor_id:userId,action,entity_type:entityType,entity_id:entityId,details});if(error){setSyncStatus('error');setSyncError(`Промената е зачувана, но активноста не е запишана: ${error.message}`)}},[userId])
- return {state,setState,session,profile,access,authReady,syncStatus,syncError,localBackup,reconcileLocalBackup,recordAudit}
+ return {state,setState,session,profile,access,authReady,syncStatus,syncError,localBackup,reconcileLocalBackup,refreshSharedState,recordAudit}
 }
