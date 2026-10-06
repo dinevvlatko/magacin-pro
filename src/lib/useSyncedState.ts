@@ -147,15 +147,23 @@ export function useSyncedState(){
    const next=needsMerge?mergeConcurrentStates(base,current,remote):remote
    baseStateRef.current=remoteBase;baseVersionRef.current=data.updated_at;stateRef.current=next;setState(next);saveState(next)
    setSyncStatus(serialized(next)===serialized(remoteBase)?'synced':'syncing')
-   return true
+   return next
   }catch(mergeError){
    // The database result (including the receipt) is authoritative. Keep it
    // visible even if a concurrent local change cannot be merged safely.
    baseStateRef.current=remoteBase;baseVersionRef.current=data.updated_at;stateRef.current=remote;setState(remote);saveState(remote)
    setSyncStatus('error');setSyncError(mergeError instanceof StateMergeError?mergeError.message:'Магацинот е освежен, но една истовремена промена не можеше да се спои.')
-   return true
+   return remote
   }
  },[session,syncReady])
+
+ useEffect(()=>{
+  if(!session||!syncReady)return
+  const refreshWhenVisible=()=>{if(document.visibilityState==='visible')void refreshSharedState()}
+  window.addEventListener('focus',refreshWhenVisible)
+  document.addEventListener('visibilitychange',refreshWhenVisible)
+  return()=>{window.removeEventListener('focus',refreshWhenVisible);document.removeEventListener('visibilitychange',refreshWhenVisible)}
+ },[refreshSharedState,session,syncReady])
 
  const reconcileLocalBackup=useCallback(async(mode:'merge'|'replace'|'discard')=>{
   if(mode==='discard'){clearPreSyncBackup();setLocalBackup(null);markSharedSyncReady();return true}

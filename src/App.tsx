@@ -83,23 +83,50 @@ function App(){
   setState(updated)
   void recordAudit('order.packing_checked','order',o.id,{number:o.number,item:key,checked:value,auto_packed:updated.orders.find(order=>order.id===o.id)?.status==='Спакувана'&&o.status!=='Спакувана'})
  }
- const changeStatus=(o:Order,next:OrderStatus)=>{
+ const stockBlockMessage=(source:AppState,order:Order)=>{
+  const withoutOrder={...source,orders:source.orders.filter(item=>item.id!==order.id)}
+  const snapshot=calculateWarehouseSnapshot(withoutOrder),shortage=reservationShortage(withoutOrder,order)
+  const rows=[
+   {key:'p025' as const,label:productName('p025'),size:15},
+   {key:'p15' as const,label:productName('p15'),size:6},
+   {key:'flyers' as const,label:productName('flyers'),size:0},
+  ].filter(item=>shortage[item.key]>0)
+  if(rows.length===0)return 'Залихата е доволна. Нарачката ќе се активира автоматски.'
+  return `Нарачката сè уште чека залиха:\n${rows.map(item=>`• ${item.label}: недостига ${quantityBreakdown(shortage[item.key],item.size)} (слободно ${quantityBreakdown(snapshot.available_stock[item.key],item.size)})`).join('\n')}`
+ }
+ const changeStatus=async(o:Order,next:OrderStatus)=>{
   if(next===o.status)return
   if(!allowedTransitions[o.status].includes(next)){alert(`Не е дозволен премин од „${o.status}“ во „${next}“.`);return}
   if(next==='Спакувана'&&!allPacked(o)){alert('Прво означи ги сите ставки како спакувани.');return}
-  if((next==='Нова'||next==='Во подготовка')&&!o.stockDeducted&&!canReserveOrder({...state,orders:state.orders.filter(order=>order.id!==o.id)},o)){alert('Нема доволно слободна залиха за повторно активирање.');return}
+  let source=state
+  if(o.status==='Чека залиха'&&(next==='Нова'||next==='Во подготовка')){
+   const refreshed=await recheckStock()
+   if(refreshed)source=refreshed
+   const reconciled=reconcileWaitingOrders(source)
+   const refreshedOrder=reconciled.orders.find(order=>order.id===o.id)
+   if(!refreshedOrder||refreshedOrder.status==='Чека залиха'){
+    alert(stockBlockMessage(reconciled,refreshedOrder||o))
+    return
+   }
+   const activated=next==='Во подготовка'?applyOrderStatusTransition(reconciled,refreshedOrder,next):reconciled
+   if(!activated){alert(stockBlockMessage(reconciled,refreshedOrder));return}
+   setState(activated)
+   void recordAudit('order.stock_rechecked','order',o.id,{number:o.number,from:o.status,to:next})
+   return
+  }
+  const current=source.orders.find(order=>order.id===o.id)||o
   if(next==='Откажана'){
-   if(o.stockDeducted&&!confirm('Количината ќе се врати во магацин. Продолжи?'))return
-   const cancelled=applyOrderStatusTransition(state,o,next)
+   if(current.stockDeducted&&!confirm('Количината ќе се врати во магацин. Продолжи?'))return
+   const cancelled=applyOrderStatusTransition(source,current,next)
    if(!cancelled){alert('Не може да се смени статусот.');return}
    const reconciled=reconcileWaitingOrders(cancelled)
    setState(reconciled)
-   void recordAudit('order.cancelled','order',o.id,{number:o.number,from:o.status,stock_returned:o.stockDeducted});return
+   void recordAudit('order.cancelled','order',o.id,{number:o.number,from:current.status,stock_returned:current.stockDeducted});return
   }
-  const transitioned=applyOrderStatusTransition(state,o,next)
+  const transitioned=applyOrderStatusTransition(source,current,next)
   if(!transitioned){alert('Не може да се смени статусот.');return}
   let finalState=transitioned
-  if((next==='Нова'||next==='Во подготовка')&&o.stockDeducted){
+  if((next==='Нова'||next==='Во подготовка')&&current.stockDeducted){
    const currentOrder=finalState.orders.find(order=>order.id===o.id)
    if(currentOrder&&!canReserveOrder({...finalState,orders:finalState.orders.filter(order=>order.id!==o.id)},currentOrder)){
     finalState={...finalState,orders:finalState.orders.map(order=>order.id===o.id?{...order,status:'Чека залиха'}:order)}
@@ -159,7 +186,7 @@ function App(){
  }
  const saveStockEntry=(p:ProductKey,t:MovementType,pack:number,pieces:number,party:string,note:string,date:string)=>{const delta=(t==='Излез'||t==='Оштетување')?-1:1;const total=p==='p025'?pack*15+pieces:p==='p15'?pack*6+pieces:pieces;const current=p==='p025'?state.warehouse.p025.total:p==='p15'?state.warehouse.p15.total:state.warehouse.flyers;if(current+delta*total<0){alert('Не е дозволена негативна залиха.');return}setState(s=>reconcileWaitingOrders({...s,warehouse:p==='p025'?{...s.warehouse,p025:normalize(s.warehouse.p025.total+delta*total,15)}:p==='p15'?{...s.warehouse,p15:normalize(s.warehouse.p15.total+delta*total,6)}:{...s.warehouse,flyers:s.warehouse.flyers+delta*total},movements:[{id:crypto.randomUUID(),date,product:p,type:t,packages:pack,pieces,party,orderNumber:'',note},...s.movements]}));void recordAudit('stock.movement','stock',p,{type:t,packages:pack,pieces,party});setShowEntry(false)}
  const saveReceipt=async(input:ReceiptInput)=>{const saved=await createReceiptAtomic(input,products);const [,refreshed]=await Promise.all([refreshReceiptProducts(),refreshSharedState()]);if(!refreshed)alert('Приемницата е зачувана, но екранот не успеа веднаш да ја освежи залихата. Отвори „Пакување“ и избери „Провери залиха“ без повторно да ја внесуваш приемницата.');void recordAudit('stock.receipt_created','receipt',saved.id,{number:saved.number,items:input.items.length,workers:input.workersTeam});setShowReceipt(false)}
- const recheckStock=async()=>{if(localMode){setState(current=>reconcileWaitingOrders(current));return}const refreshed=await refreshSharedState();if(!refreshed)alert('Не може да се вчита најновата залиха. Провери ја интернет-врската и обиди се повторно.')}
+ const recheckStock=async():Promise<AppState|null>=>{if(localMode){const next=reconcileWaitingOrders(state);setState(next);return next}const refreshed=await refreshSharedState();if(!refreshed){alert('Не може да се вчита најновата залиха. Провери ја интернет-врската и обиди се повторно.');return null}return refreshed}
  const openNewReceipt=()=>{if(receiptModuleStatus!=='ready'){alert(receiptModuleError||'Приемниците сè уште се вчитуваат.');return}setShowReceipt(true)}
  const saveEditedReceipt=(receipt:ReceiptGroup,lines:Movement[],workers:string,note:string,date:string)=>{
   const total=(line:Movement)=>line.product==='p025'?line.packages*15+line.pieces:line.product==='p15'?line.packages*6+line.pieces:line.pieces
@@ -176,7 +203,7 @@ function App(){
  const printReport=(report:ReportPrintDocument)=>{setReportToPrint(report);setPrintMode('report');setPrintQrDataUrl('');setTimeout(()=>window.print(),50)}
  return <div className="app"><SideNav page={page} setPage={setPage} isAdmin={isAdmin}/><main className="main">
   {page==='dashboard'&&<Dashboard state={state} r={r} a={a} setPage={setPage} openOrder={id=>{setSelected(id);setPage('packing')}} openPacked={()=>{setSelected(state.orders.find(o=>o.status==='Спакувана')?.id||null);setPage('packing')}}/>}
-  {page==='orders'&&<Orders state={state} query={query} setQuery={setQuery} selectedIds={selectedLoadIds} setSelectedIds={setSelectedLoadIds} onOpen={id=>{setSelected(id);setPage('packing')}} onNew={()=>setShowOrder(true)} onEdit={editOrder} onChangeStatus={changeStatus} onDelete={isAdmin?deleteOrder:undefined}/>}
+  {page==='orders'&&<Orders state={state} query={query} setQuery={setQuery} selectedIds={selectedLoadIds} setSelectedIds={setSelectedLoadIds} onOpen={id=>{setSelected(id);setPage('packing')}} onNew={()=>setShowOrder(true)} onEdit={editOrder} onChangeStatus={changeStatus} onRecheckStock={recheckStock} onDelete={isAdmin?deleteOrder:undefined}/>}
   {page==='packing'&&<Packing state={state} order={packingOrder} onSelect={setSelected} orders={packingOrders} patchPacked={patchPacked} changeStatus={changeStatus} advanceOrder={advanceOrder} printOrder={printOrder} onEdit={editOrder} recheckStock={recheckStock} fromQr={Boolean(linkedOrderId&&packingOrder?.id===linkedOrderId)}/>}
   {page==='warehouse'&&<WarehousePage state={state} onEntry={()=>setShowEntry(true)} onReceipt={openNewReceipt} onEditReceipt={receipt=>setEditingReceiptNumber(receipt.number)}/>}
   {page==='clients'&&<ClientsPage state={state} onSaveClient={saveClientProfile}/>}
@@ -233,8 +260,9 @@ type OrderView='new'|'packed'|'sent'|'delivered'|'cancelled'|'loading'
 const orderViewLabels:Record<OrderView,string>={new:'Нови',packed:'Спакувани',sent:'Испратени',delivered:'Доставени',cancelled:'Откажани',loading:'План за товарење'}
 const orderMatchesView=(order:Order,view:OrderView)=>view==='new'?['Чека залиха','Нова','Во подготовка'].includes(order.status):view==='packed'?order.status==='Спакувана':view==='sent'?['Излезена','Испратена'].includes(order.status):view==='delivered'?order.status==='Доставена':view==='cancelled'?order.status==='Откажана':['Чека залиха','Нова','Во подготовка','Спакувана'].includes(order.status)
 
-function Orders({state,query,setQuery,selectedIds,setSelectedIds,onOpen,onNew,onEdit,onChangeStatus,onDelete}:{state:AppState;query:string;setQuery:(value:string)=>void;selectedIds:Set<string>;setSelectedIds:(value:Set<string>)=>void;onOpen:(id:string)=>void;onNew:()=>void;onEdit:(order:Order)=>void;onChangeStatus:(order:Order,status:OrderStatus)=>void;onDelete?:(id:string)=>void}){
+function Orders({state,query,setQuery,selectedIds,setSelectedIds,onOpen,onNew,onEdit,onChangeStatus,onRecheckStock,onDelete}:{state:AppState;query:string;setQuery:(value:string)=>void;selectedIds:Set<string>;setSelectedIds:(value:Set<string>)=>void;onOpen:(id:string)=>void;onNew:()=>void;onEdit:(order:Order)=>void;onChangeStatus:(order:Order,status:OrderStatus)=>void;onRecheckStock:()=>Promise<AppState|null>;onDelete?:(id:string)=>void}){
  const [view,setView]=useState<OrderView>('new')
+ const [checkingStock,setCheckingStock]=useState(false)
  const searched=state.orders.filter((order:Order)=>(order.client+' '+order.city+' '+order.number).toLowerCase().includes(query.toLowerCase()))
  const list=searched.filter(order=>orderMatchesView(order,view)).toSorted((a:Order,b:Order)=>b.date.localeCompare(a.date)||b.number.localeCompare(a.number))
  const loadingOrders=state.orders.filter(order=>orderMatchesView(order,'loading'))
@@ -245,16 +273,18 @@ function Orders({state,query,setQuery,selectedIds,setSelectedIds,onOpen,onNew,on
  const choose=(orders:Order[])=>setSelectedIds(new Set(orders.map(order=>order.id)))
  const changeView=(next:OrderView)=>{setView(next);if(next!=='loading')setSelectedIds(new Set())}
  const counts=Object.fromEntries((Object.keys(orderViewLabels) as OrderView[]).map(key=>[key,state.orders.filter(order=>orderMatchesView(order,key)).length])) as Record<OrderView,number>
+ const waitingCount=state.orders.filter(order=>order.status==='Чека залиха').length
+ const recheck=async()=>{setCheckingStock(true);try{await onRecheckStock()}finally{setCheckingStock(false)}}
  const emptyText=view==='new'?'Нема нови нарачки.':view==='packed'?'Нема спакувани нарачки.':view==='sent'?'Нема испратени нарачки.':view==='delivered'?'Нема доставени нарачки.':view==='cancelled'?'Нема откажани нарачки.':'Нема нови или спакувани нарачки за товарење.'
  return <><PageHeader title="Нарачки" action={<button className="primary" onClick={onNew}><CirclePlus size={18}/> Нова нарачка</button>}/>
   <div className="status-tabs">{(Object.keys(orderViewLabels) as OrderView[]).map(key=><button key={key} className={view===key?'active':''} onClick={()=>changeView(key)}><span>{orderViewLabels[key]}</span><b>{counts[key]}</b></button>)}</div>
   {view==='loading'&&<Card className="loading-planner"><div className="section-title"><div><h3>План за товарење</h3><p>Тука се појавуваат само нови, во подготовка и спакувани нарачки.</p></div><strong>{selected.length} избрани</strong></div><div className="planner-actions"><button className="ghost" onClick={()=>choose(list)}>Избери ги прикажаните</button><button className="ghost" onClick={()=>choose(list.filter(order=>order.status==='Спакувана'))}>Само спакувани</button><button className="ghost" onClick={()=>choose(list.filter(order=>['Чека залиха','Нова','Во подготовка'].includes(order.status)))}>Само нови</button><button className="ghost" onClick={()=>setSelectedIds(new Set())}>Исчисти</button></div><div className="planner-grid"><PlannerItem title={productName('p025')} needed={totals.p025} stock={state.warehouse.p025.total} remaining={remaining.p025} perPackage={15}/><PlannerItem title={productName('p15')} needed={totals.p15} stock={state.warehouse.p15.total} remaining={remaining.p15} perPackage={6}/><PlannerItem title="Флаери" needed={totals.flyers} stock={state.warehouse.flyers} remaining={remaining.flyers} perPackage={0}/></div></Card>}
-  <div className="toolbar"><div className="search"><Search size={18}/><input placeholder="Пребарај клиент, град или број..." value={query} onChange={event=>setQuery(event.target.value)}/></div></div>
+  <div className="toolbar orders-toolbar"><div className="search"><Search size={18}/><input placeholder="Пребарај клиент, град или број..." value={query} onChange={event=>setQuery(event.target.value)}/></div>{waitingCount>0&&<button type="button" className="ghost" disabled={checkingStock} onClick={()=>void recheck()}><RotateCcw size={17}/>{checkingStock?' Се проверува...':` Провери и распореди (${waitingCount})`}</button>}</div>
   <Card>{list.length===0?<Empty text={emptyText}/>:<div className={`orders-list${view==='loading'?' planner-orders':''}`}>{list.map((order:Order)=><article className={order.status==='Чека залиха'?'waiting-order':''} key={order.id} onClick={()=>onOpen(order.id)}>{view==='loading'&&<label className="load-check" onClick={event=>event.stopPropagation()}><input type="checkbox" checked={selectedIds.has(order.id)} onChange={()=>toggle(order.id)}/><span>{selectedIds.has(order.id)?'✓':''}</span></label>}<div className="order-main"><div className="order-number">{order.number}</div><h3>{order.client}</h3><p>{order.city} • {order.date}</p></div><div className="order-qty"><span>{productName('p025')} <b>{quantityBreakdown(orderPieces(order).p025,15)}</b></span><span>{productName('p15')} <b>{quantityBreakdown(orderPieces(order).p15,6)}</b></span><span>Флаери <b>{order.flyers} пар.</b></span></div><div className="order-actions"><select aria-label={`Статус за ${order.number}`} value={order.status} onClick={event=>event.stopPropagation()} onChange={event=>{event.stopPropagation();onChangeStatus(order,event.target.value as OrderStatus)}}>{[order.status,...allowedTransitions[order.status]].map(status=><option key={status}>{status}</option>)}</select><button className="icon-btn" onClick={event=>{event.stopPropagation();onEdit(order)}}><Pencil size={17}/></button>{onDelete&&<button className="icon-btn danger" onClick={event=>{event.stopPropagation();onDelete(order.id)}}><Trash2 size={17}/></button>}<ChevronRight size={20}/></div></article>)}</div>}</Card></>
 }
 const PlannerItem=({title,needed,stock,remaining,perPackage}:{title:string;needed:number;stock:number;remaining:number;perPackage:number})=><div className={`planner-item${remaining<0?' shortage':''}`}><h4>{title}</h4><span>Потребно <b>{needed}</b><small>{quantityBreakdown(needed,perPackage)}</small></span><span>Во магацин <b>{stock}</b></span>{remaining>=0?<span>Ќе остане <b>{remaining}</b><small>{quantityBreakdown(remaining,perPackage)}</small></span>:<span>Недостига <b>{Math.abs(remaining)}</b><small>{quantityBreakdown(Math.abs(remaining),perPackage)}</small></span>}</div>
 
-function Packing({state,order,orders,onSelect,patchPacked,changeStatus,advanceOrder,printOrder,onEdit,recheckStock,fromQr}:{state:AppState;order:Order|null;orders:Order[];onSelect:(id:string)=>void;patchPacked:(o:Order,key:keyof Order['packed'],value:boolean)=>void;changeStatus:(o:Order,s:OrderStatus)=>void;advanceOrder:(o:Order)=>void;printOrder:(o:Order)=>void;onEdit:(o:Order)=>void;recheckStock:()=>Promise<void>;fromQr:boolean}){
+function Packing({state,order,orders,onSelect,patchPacked,changeStatus,advanceOrder,printOrder,onEdit,recheckStock,fromQr}:{state:AppState;order:Order|null;orders:Order[];onSelect:(id:string)=>void;patchPacked:(o:Order,key:keyof Order['packed'],value:boolean)=>void;changeStatus:(o:Order,s:OrderStatus)=>void;advanceOrder:(o:Order)=>void;printOrder:(o:Order)=>void;onEdit:(o:Order)=>void;recheckStock:()=>Promise<AppState|null>;fromQr:boolean}){
  if(!order)return <><PageHeader title="Пакување"/><Empty text="Нема нарачки за пакување."/></>
  const total025Packages=order.qty025+order.free025,total025Pieces=(order.qty025Pieces||0)+(order.free025Pieces||0),total15Packages=order.qty15+(order.free15||0),total15Pieces=(order.qty15Pieces||0)+(order.free15Pieces||0)
  const packageAmount=(packages:number,pieces:number)=>`${packages} пакети${pieces?` + ${pieces} парчиња`:''}`
@@ -271,7 +301,7 @@ function Packing({state,order,orders,onSelect,patchPacked,changeStatus,advanceOr
   </div>
  </div></>
 }
-function WaitingStockPanel({state,order,onRecheck}:{state:AppState;order:Order;onRecheck:()=>Promise<void>}){
+function WaitingStockPanel({state,order,onRecheck}:{state:AppState;order:Order;onRecheck:()=>Promise<AppState|null>}){
  const snapshot=calculateWarehouseSnapshot(state),needed=orderPieces(order),shortage=reservationShortage(state,order)
  const rows=[
   {key:'p025' as const,label:productName('p025'),size:15},

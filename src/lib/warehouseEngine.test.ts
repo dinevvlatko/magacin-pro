@@ -10,6 +10,7 @@ import {
   getProductPackageSize,
   hydrateState,
   normalizeWarehouseTotals,
+  reconcileWaitingOrders,
 } from './logic'
 
 const makeOrder = (overrides: Partial<Order> = {}): Order => ({
@@ -250,6 +251,29 @@ describe('warehouse engine', () => {
     expect(savedFirst.status).toBe('Нова')
     expect(savedSecond.status).toBe('Нова')
     expect(available(complete)).toEqual({ p025: 0, p15: 0, flyers: 0 })
+  })
+
+  it('activates all three waiting orders from the screenshot when the receipt covers every product', () => {
+    const orders = [
+      makeOrder({ id: '0017', number: 'PG-2026-0017', date: '2026-10-02', status: 'Чека залиха', qty025: 100, qty15: 10, flyers: 200 }),
+      makeOrder({ id: '0018', number: 'PG-2026-0018', date: '2026-10-02', status: 'Чека залиха', qty025: 95, qty15: 10, flyers: 400 }),
+      makeOrder({ id: '0019', number: 'PG-2026-0019', date: '2026-10-02', status: 'Чека залиха', qty025: 60, qty15: 2, flyers: 200 }),
+    ]
+    const state: AppState = {
+      warehouse: {
+        p025: { packages: 255, pieces: 0, total: 3825, perPackage: 15 },
+        p15: { packages: 22, pieces: 0, total: 132, perPackage: 6 },
+        flyers: 800,
+      },
+      orders,
+      clients: [],
+      movements: [],
+    }
+
+    const reconciled = reconcileWaitingOrders(state)
+
+    expect(reconciled.orders.every(order => order.status === 'Нова')).toBe(true)
+    expect(available(reconciled)).toEqual({ p025: 0, p15: 0, flyers: 0 })
   })
 
   it('packs the two exact Skopje orders and leaves the warehouse empty', () => {
